@@ -1,0 +1,13 @@
+services:
+  solr:
+    image: solr:9
+    container_name: solr-wormhole-vectors
+    ports:
+      - "8983:8983"
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /var/solr/data/configsets
+        cp -r /opt/solr/server/solr/configsets/_default /var/solr/data/configsets/
+        exec solr-foreground

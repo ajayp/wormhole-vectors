@@ -1,0 +1,21 @@
+{
+  "name": "wormhole-poc",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "ingest": "tsx scripts/ingest.ts",
+    "cli": "tsx src/cli.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "test:integration": "tsx --test tests/integration/**/*.test.ts",
+    "test:all": "tsx --test tests/*.test.ts tests/integration/**/*.test.ts"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "latest",
+    "dotenv": "latest"
+  },
+  "devDependencies": {
+    "tsx": "latest",
+    "typescript": "latest",
+    "@types/node": "latest"
+  }
+}
