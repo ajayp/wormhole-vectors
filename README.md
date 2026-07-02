@@ -1,13 +1,16 @@
 # 🌌 Wormhole Vectors PoC
 
-This project is a Proof of Concept (PoC) implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. The idea: use a vector search to find the right documents, then use those documents as a shortcut from meaning-space into keyword-space — so the two work together instead of running on separate tracks. Built on Apache Solr.
+**Search "java" and get programming results when that's what you mean, or coffee results when it's not — automatically, without synonym lists.**
+
+This project is a Proof of Concept (PoC) implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. 
+
+The idea: use a vector search to find the right neighborhood of documents, then let those documents tell you which keywords to search with — so the second search is guided by the first, not running blind on the raw query. Built on Apache Solr.
 
 ## Table of Contents
 
 - [❓ The Problem It Solves](#-the-problem-it-solves)
 - [🚀 The Wormhole Solution](#-the-wormhole-solution)
 - [🧠 Concept Overview](#-concept-overview)
-- [🚀 Key Features](#-key-features)
 - [🎯 Examples](#-examples)
 - [🛠️ Setup & Ingestion](#-setup--ingestion)
 - [⚙️ Configuration](#-configuration)
@@ -78,6 +81,21 @@ graph LR
 
 ## 🧠 Concept Overview
 
+The SKG step is where the wormhole bridge gets built. The key insight: it doesn't need an LLM to translate vectors back into words. Instead, it reuses the indexes a search engine already has — the forward index tells you which terms are in a given document, and the inverted index tells you which documents contain a given term. By walking from the foreground set of documents (via the forward index) out to their terms, then checking how often those terms show up across the rest of the corpus (via the inverted index), Solr can work out statistically which terms are unusually characteristic of this specific document set — no additional embeddings, no generative model, just counting.
+
+<details>
+<summary>Show the underlying scoring math</summary>
+
+SKG treats the search engine as a graph and asks: which terms are statistically significant in the Foreground Set (the documents the dense hop returned) compared to the background corpus (the rest of the index)? This isn't just raw term frequency — stopwords like "the" are frequent everywhere. Instead, it compares each term's probability of appearing in the foreground, `P(t|Foreground)`, against its probability of appearing in the background, `P(t|Background)`:
+
+```
+Score(t) = P(t|Foreground) / P(t|Background)
+```
+
+A high score means the term is disproportionately common in the foreground set relative to the rest of the corpus — i.e., it's part of the "vibe" the dense hop found.
+
+</details>
+
 The "wormhole" is created across two Solr round-trips:
 
 ```mermaid
@@ -115,7 +133,7 @@ The three steps work the same way described in [The Wormhole Solution](#-the-wor
 
 - **The Dense Hop** calls the isolated top-15 documents the "Foreground Set." "Close" in vector space can still span multiple meanings — for a bare query like `server`, the foreground set might mix tech infrastructure docs with restaurant docs. The dense hop alone is necessary but insufficient.
 
-- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. Think of it like walking into a room where everyone's talking about restaurants — you'd quickly pick up that words like `menu`, `tip`, and `dining` are common here but rare in the rest of the building. SKG does this statistically, in real time.
+- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. The forward/inverted index counting described above happens as a facet on that single request, so you get the dense results and the derived keywords back together.
 
 - **The Sparse Hop** boosts the BM25 query by each term's relatedness score. The final results prioritize sparse hits, backfilling from the dense set if needed.
 
@@ -123,13 +141,7 @@ The three steps work the same way described in [The Wormhole Solution](#-the-wor
 
 > **Note on ranking:** Within each hop, results are ordered by that hop's own relevance score (BM25 score for sparse, vector similarity for dense). But sparse and dense aren't on a shared scale — the merge step lists all sparse results first, then backfills remaining slots with dense results, without re-scoring one against the other. So a wormhole result's *position* in the final list reflects which hop found it and that hop's internal ranking, not a unified relevance score across both.
 
----
-
-## 🚀 Key Features
-
-- **Automatic Disambiguation**: Distinguishes between ambiguous words (e.g., `server` = tech infrastructure vs. restaurant staff) without relying on manually maintained synonym lists.
-- **Built-in Explainability**: Opens the vector "black box" by generating human-readable keywords that explain exactly *why* a result matched.
-- **Solves Vocabulary Gaps** *(conceptual — not demonstrated by this repo's demo corpus)*: The technique generally bridges zero-result lexical mismatches. Hypothetically, if an item were indexed as `Donut` and a user searched `sweet dough ring`, a wormhole hop through dense space would find it and map back to real keywords — without a hand-maintained synonym list. This repo's demo corpus focuses on term disambiguation instead (see [Examples](#-examples) below for what actually runs).
+> **Note on vocabulary gaps** *(conceptual — not demonstrated by this repo's demo corpus)*: Beyond disambiguation, the technique generally bridges zero-result lexical mismatches. Hypothetically, if an item were indexed as `Donut` and a user searched `sweet dough ring`, a wormhole hop through dense space would find it and map back to real keywords — without a hand-maintained synonym list. This repo's demo corpus focuses on term disambiguation instead (see [Examples](#-examples) below for what actually runs).
 
 ---
 
@@ -158,42 +170,43 @@ Server CPU and Memory Sizing           │ Firewall and iptables on Linux Server
 
 **Behavior**: With no explicit context provided, there is no clean split. The SKG terms go both ways (stemmed forms like `attent`/`commun` from hospitality alongside `cpu`/`host` from tech) and the Wormhole column mixes tech and hospitality. The plain BM25 search leans mostly tech here (4 of 5), but that's just a coincidence from the raw term frequency, not structural disambiguation — there's no mechanism steering it either way.
 
-### Case 2: Intent-Driven Context Steering
+### Case 2: Context Steering a Three-Way Ambiguous Term (`Mercury poison`)
 
-Here's what happens once there's context:
+Case 1 showed what happens with no context. Here's what happens once there is — using a term with *three* senses (planet, element, car brand):
 
 ```
-Query: server I ordered food from
-SKG terms: [restaur(0.067), server(0.066), servic(0.061), dine(0.048), food(0.048), protocol(0.048), requir(0.043), guest(0.041)]
+Query: Mercury poison
+SKG terms: [mercuri(0.067), mine(0.048), toxic(0.048), atom(0.041), amalgam(0.040), element(0.040), histor(0.040), releas(0.040)]
 
 Wormhole Results                       │ Plain BM25 Search
 --------------------------------------─┼─--------------------------------------
-Restaurant Server Training Guide       │ Point of Sale Systems for Servers
-Fine Dining Table Service Etiquette    │ Food Safety Training for Servers
-Server Burnout in the Restaurant Ind.  │ Server Tip Pooling Policies
-Server Tip Pooling Policies            │ Web Server Load Balancing
-Food Safety Training for Servers       │ Fine Dining Table Service Etiquette
+Mercury in Gold Mining                 │ Mercury Toxicity and Health Risks
+Mining and Extraction of Mercury       │ Mining and Extraction of Mercury
+Mercury Toxicity and Health Risks      │ Mercury Marquis Dealerships
+Mercury the Chemical Element           │ Mercury in Gold Mining
+Mercury Amalgam in Dentistry           │ The Minamata Convention on Mercury
 ```
 
-The extra words pull the dense hop fully into hospitality, so the dominant SKG terms and every result land there too. (A couple of noisier terms like `protocol` and `requir` still surface — the foreground set is small — but the relatedness-boosted BM25 hop keeps the right documents on top.) The wormhole column has **zero stray tech titles** and the SKG terms provide a clear, human-readable explanation (`restaur`, `dine`, `guest`) for *why* the pivot toward hospitality happened — something a raw BM25 score cannot offer.
+`Mercury` is ambiguous across planet, chemical element, and car brand. BM25 matches the literal token and returns mostly element docs — but `Mercury Marquis Dealerships` (a car) slips in at position 3 because "Mercury" the string is the same regardless of meaning. The wormhole pipeline reads `poison` as context, steers the dense hop into the chemical-element domain, and the SKG terms it derives (`mercuri`, `mine`, `toxic`, `amalgam`, `element`) are unambiguously chemistry vocabulary — 5 of 5 results are `mercury_element`, 0 stray.
 
-Plain BM25 now also picks up "food" as a literal keyword match and lands mostly on hospitality as well — but it still lets one stray tech result slip through (`Web Server Load Balancing`), and it cannot tell you *why* it returned what it did. The difference is **precision** (no strays) and **explainability** (human-readable SKG terms vs. opaque scores).
+The difference is **domain purity** (no car or planet docs) and **explainability** — the SKG terms tell you *why* the results are about the element, not the planet or the car.
 
 ```mermaid
 flowchart TB
     classDef input fill:#f1f5f9,stroke:#64748b,color:#0f172a
     classDef anchor fill:#fef3c7,stroke:#d97706,color:#78350f
-    classDef tech fill:#ecfdf5,stroke:#059669,color:#064e3b
-    classDef hosp fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    classDef planet fill:#e0e7ff,stroke:#4f46e5,color:#1e1b4b
+    classDef element fill:#ecfdf5,stroke:#059669,color:#064e3b
+    classDef car fill:#fff1f2,stroke:#e11d48,color:#4c0519
 
-    I1(["server"]):::input
-    I2(["server I ordered food from"]):::input
+    I1(["Mercury"]):::input
+    I2(["Mercury poison"]):::input
 
     I1 --> W{{"SKG: relatedness($fore, $back)"}}:::anchor
     I2 --> W
 
-    W -->|"no context → mixed terms:<br/>cpu, host, file"| tech[BM25 Hop]:::tech
-    W -->|"food context → hospitality terms:<br/>restaur, dine, guest"| hosp[BM25 Hop]:::hosp
+    W -->|"no context → mixed terms"| planet[BM25 Hop]:::planet
+    W -->|"poison context → element terms:<br/>mercuri, toxic, mine, amalgam"| element[BM25 Hop]:::element
 ```
 
 ### Case 3: Cross-Domain Purity (`java`)
