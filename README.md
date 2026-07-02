@@ -359,3 +359,5 @@ wormhole-poc/
 ## Reference
 
 [Beyond Hybrid Search: Traversing Vector Spaces with Wormhole Vectors](https://www.youtube.com/watch?v=fvDC7nK-_C0) — the talk this repo implements.
+
+> This PoC implements the dense → sparse direction of wormhole traversal. The full technique as described in the talk also supports the reverse direction (sparse → dense via vector pooling), iterative traversal loops, and additional search spaces such as behavioral/clickstream embeddings.
