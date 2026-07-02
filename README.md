@@ -28,7 +28,7 @@ Modern search engines usually use two separate tracks to find information:
 
 Today's common fix, "hybrid search," just runs both tracks in parallel and blends the results together (typically via Reciprocal Rank Fusion, or RRF) — without actually fixing either technique's weakness above. 
 
-That's the gap Wormhole Vectors closes.
+That's the gap Wormhole Vectors close. Instead of blending, they connect: the documents from the first search become the keywords for the second. So ambiguity actually gets resolved, and you get a plain-English reason why — not just a blended score.
 
 ---
 
