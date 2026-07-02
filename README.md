@@ -23,8 +23,8 @@ The idea: use a vector search to find the right neighborhood of documents, then 
 
 Modern search engines usually use two separate tracks to find information:
 
-1. **Dense Vector Search (AI/Embeddings):** Looks for conceptual meaning. It is great at capturing abstract intent, but it acts like a "black box" — you don't easily see *why* the AI thought two things were related.
-2. **Sparse Keyword Search (Traditional/BM25):** Looks for exact word matches. It is fully explainable, but it is easily tricked by synonyms or ambiguous words.
+1. **Dense Vector Search (AI/Embeddings):** Looks for conceptual meaning. It's great at capturing abstract intent, but it acts like a "black box" — you don't easily see *why* the AI thought two things were related.
+2. **Sparse Keyword Search (Traditional/BM25):** Looks for exact word matches. It's fully explainable, but it's easily tricked by synonyms or ambiguous words.
 
 Today's common fix, "hybrid search," just runs both tracks in parallel and blends the results together (typically via Reciprocal Rank Fusion, or RRF) — without actually fixing either technique's weakness above. 
 
@@ -209,7 +209,7 @@ Together, Case 3 and Case 5 make the strongest version of the pitch: the *same* 
 
 ## Concept Overview
 
-The SKG step is where the wormhole bridge gets built. The key insight: it doesn't need an LLM to translate vectors back into words. Instead, it reuses the indexes a search engine already has — the forward index tells you which terms are in a given document, and the inverted index tells you which documents contain a given term. By walking from the foreground set of documents (via the forward index) out to their terms, then checking how often those terms show up across the rest of the corpus (via the inverted index), Solr can work out statistically which terms are unusually characteristic of this specific document set — no additional embeddings, no generative model, just counting.
+The SKG step is where the wormhole bridge gets built. It doesn't need an LLM to translate vectors back into words. Instead, it reuses the indexes a search engine already has — the forward index tells you which terms are in a given document, and the inverted index tells you which documents contain a given term. By walking from the foreground set of documents (via the forward index) out to their terms, then checking how often those terms show up across the rest of the corpus (via the inverted index), Solr can work out statistically which terms are unusually characteristic of this specific document set — no additional embeddings, no generative model, just counting.
 
 <details>
 <summary>Show the underlying scoring math</summary>
@@ -323,7 +323,7 @@ npm run test:all
 
 ## Configuration
 
-Operational settings, handled via local `.env` values:
+These are operational settings, set via local `.env` values:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -341,14 +341,14 @@ wormhole-poc/
 ├── .env                   # Environment configurations
 ├── docker-compose.yml      # Standalone Solr 9 container deployment profiles
 ├── src/
-│   ├── solr-client.ts      # REST API wrapper communication modules
-│   ├── embed.ts            # Xenova local text-to-vector transformer pipeline
-│   ├── solr.ts             # Core collections schema deployment scripts
-│   ├── search.ts           # Solr dense vector, BM25, and SKG facets functions
+│   ├── solr-client.ts      # Thin REST client for Solr
+│   ├── embed.ts            # Local text-to-vector embedding (Xenova)
+│   ├── solr.ts             # Schema setup for the Solr core
+│   ├── search.ts           # Dense, BM25, and SKG query builders
 │   ├── wormhole.ts         # Orchestrates the dense→SKG→sparse pipeline
-│   └── cli.ts              # Interactive side-by-side validation test REPL
+│   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
-│   └── ingest.ts           # Seeding script containing target test datasets
+│   └── ingest.ts           # Seeds the demo corpus into Solr
 └── tests/
     ├── search.test.ts            # Query-building unit tests (mocked fetch)
     ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)
