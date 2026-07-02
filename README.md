@@ -26,7 +26,9 @@ Modern search engines usually use two separate tracks to find information:
 1. **Dense Vector Search (AI/Embeddings):** Looks for conceptual meaning. It is great at capturing abstract intent, but it acts like a "black box" — you don't easily see *why* the AI thought two things were related.
 2. **Sparse Keyword Search (Traditional/BM25):** Looks for exact word matches. It is fully explainable, but it is easily tricked by synonyms or ambiguous words.
 
-Today's common fix, "hybrid search," just runs both tracks in parallel and blends the results together (typically via Reciprocal Rank Fusion, or RRF) — without actually fixing either technique's weakness above. That's the gap Wormhole Vectors closes.
+Today's common fix, "hybrid search," just runs both tracks in parallel and blends the results together (typically via Reciprocal Rank Fusion, or RRF) — without actually fixing either technique's weakness above. 
+
+That's the gap Wormhole Vectors closes.
 
 ---
 
@@ -45,7 +47,7 @@ A **Wormhole Vector** closes that gap by traversing through two search spaces se
 
 *(See [Concept Overview](#concept-overview) for how each step is configured under the hood.)*
 
-#### Pipeline Architecture Comparison
+### Pipeline Architecture Comparison
 
 ```mermaid
 graph LR
@@ -66,7 +68,7 @@ graph LR
     style Out2 fill:#dcfce7,stroke:#22c55e
 ```
 
-#### Approach Capability Matrix
+### Approach Capability Matrix
 
 | Search Type | Captures Abstract Intent? | Fully Explainable? | Handles Ambiguity? |
 | --- | --- | --- | --- |
@@ -255,11 +257,11 @@ graph TD
     BM25 --> Final
 ```
 
-The three steps work the same way described in [The Wormhole Solution](#the-wormhole-solution) above, with a few implementation details worth calling out:
+A few implementation details are worth calling out for each step:
 
-- **The Dense Hop** calls the isolated top-15 documents the "Foreground Set." "Close" in vector space can still span multiple meanings — for a bare query like `server`, the foreground set might mix tech infrastructure docs with restaurant docs. The dense hop alone is necessary but insufficient.
+- **The Dense Hop** calls the isolated top-15 documents the "Foreground Set." "Close" in vector space can still span multiple meanings — for a bare query like `server`, the foreground set might mix tech infrastructure docs with restaurant docs.
 
-- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. The forward/inverted index counting described above happens as a facet on that single request, so you get the dense results and the derived keywords back together.
+- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. It runs as a facet on that request, so dense results and derived keywords come back together.
 
 - **The Sparse Hop** boosts the BM25 query by each term's relatedness score. The final results prioritize sparse hits, backfilling from the dense set if needed.
 
