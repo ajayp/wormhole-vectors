@@ -8,7 +8,7 @@ The idea: use a vector search to find the right neighborhood of documents, then 
 
 ## Table of Contents
 
-- [❓ The Problem It Solves](#-the-problem-it-solves)
+- [The Problem It Solves](#the-problem-it-solves)
 - [🚀 The Wormhole Solution](#-the-wormhole-solution)
 - [🧠 Concept Overview](#-concept-overview)
 - [🎯 Examples](#-examples)
@@ -19,18 +19,20 @@ The idea: use a vector search to find the right neighborhood of documents, then 
 
 ---
 
-### ❓ The Problem It Solves
+## The Problem It Solves
 
 Modern search engines usually use two separate tracks to find information:
 
 1. **Dense Vector Search (AI/Embeddings):** Looks for conceptual meaning. It is great at capturing abstract intent, but it acts like a "black box" — you don't easily see *why* the AI thought two things were related.
 2. **Sparse Keyword Search (Traditional/BM25):** Looks for exact word matches. It is fully explainable, but it is easily tricked by synonyms or ambiguous words.
 
-Traditional "hybrid search" setups simply run both tracks completely in parallel and smash the results together using a blending algorithm like Reciprocal Rank Fusion (RRF).
+Today's common fix, "hybrid search," just runs both tracks in parallel and blends the results together (typically via Reciprocal Rank Fusion, or RRF) — without actually fixing either technique's weakness above. That's the gap Wormhole Vectors closes.
 
-### 🚀 The Wormhole Solution
+---
 
-Instead of running two isolated tracks, a **Wormhole Vector** traverses through two search spaces sequentially — using the document set to hop from one to the other. Here's how it works:
+## 🚀 The Wormhole Solution
+
+A **Wormhole Vector** closes that gap by traversing through two search spaces sequentially — using the document set to hop from one to the other. Here's how it works:
 
 1. **Start in Dense Space:** User searches for `server I ordered food from`. The query is converted to a vector embedding, and Solr finds the 15 nearest documents.
    - *Result: All results are about hospitality — the vector understood that "ordered food from" pulls `server` toward restaurant context, not tech.*
