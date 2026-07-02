@@ -2,6 +2,20 @@
 
 This project is a Proof of Concept (PoC) implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. The idea: use a vector search to find the right documents, then use those documents as a shortcut from meaning-space into keyword-space — so the two work together instead of running on separate tracks. Built on Apache Solr.
 
+## Table of Contents
+
+- [❓ The Problem It Solves](#-the-problem-it-solves)
+- [🚀 The Wormhole Solution](#-the-wormhole-solution)
+- [🧠 Concept Overview](#-concept-overview)
+- [🚀 Key Features](#-key-features)
+- [🎯 Examples](#-examples)
+- [🛠️ Setup & Ingestion](#-setup--ingestion)
+- [⚙️ Configuration](#-configuration)
+- [📁 File Structure](#-file-structure)
+- [📺 Reference](#-reference)
+
+---
+
 ### ❓ The Problem It Solves
 
 Modern search engines usually use two separate tracks to find information:
@@ -17,8 +31,10 @@ Instead of running two isolated tracks, a **Wormhole Vector** traverses through 
 
 1. **Start in Dense Space:** User searches for `server I ordered food from`. The query is converted to a vector embedding, and Solr finds the 15 nearest documents.
    - *Result: All results are about hospitality — the vector understood that "ordered food from" pulls `server` toward restaurant context, not tech.*
-2. **Bridge via SKG:** Solr runs a Semantic Knowledge Graph `relatedness()` analysis on those documents — asking "what words show up here way more than in the background corpus?"
+
+2. **Bridge via SKG:** Those 15 documents are passed into Solr's Semantic Knowledge Graph `relatedness()` function, which compares the words in them against the whole corpus — asking "what words show up here way more than in the background corpus?"
    - *Result: Statistically significant terms emerge — `{restaur, dine, food, guest}`. These are human-readable keywords that represent the "vibe" the dense space found — no synonym list required.*
+   
 3. **Hop to Sparse Space:** Those keywords become a BM25 search (boosted by their relatedness scores).
    - *Result: Results land precisely in the hospitality domain — zero stray tech titles, and the SKG term list explains exactly why the pivot happened.*
 
@@ -45,7 +61,7 @@ graph LR
     style Out2 fill:#dcfce7,stroke:#22c55e
 ```
 
-> **SKG** = Semantic Knowledge Graph — Solr's built-in `relatedness()` function that compares term frequencies between a target document set and the full corpus. Explained in detail in [Concept Overview](#-concept-overview) below.
+> **SKG** = Semantic Knowledge Graph, Solr's built-in `relatedness()` function (see [Concept Overview](#-concept-overview) for the full mechanics).
 
 #### Approach Capability Matrix
 
@@ -60,24 +76,7 @@ graph LR
 
 ---
 
-## Table of Contents
-
-- [🧠 Concept Overview](#-concept-overview)
-- [🚀 Key Features](#-key-features)
-- [🎯 Examples](#-examples)
-- [🛠️ Setup & Ingestion](#-setup--ingestion)
-- [⚙️ Configuration](#-configuration)
-- [📁 File Structure](#-file-structure)
-- [📺 Reference](#-reference)
-
----
-
 ## 🧠 Concept Overview
-
-Wormhole vectors bridge two traditionally isolated search spaces:
-
-1. **Dense Vector Space**: Semantic embeddings that capture abstract meaning but lack explainability.
-2. **Sparse Keyword Space**: Traditional BM25 keyword search that is explainable but blind to vocabulary context.
 
 The "wormhole" is created across two Solr round-trips:
 
@@ -112,11 +111,13 @@ graph TD
     BM25 --> Final
 ```
 
-- **The Dense Hop (AI Concept Search):** We run a quick nearest-neighbor vector query (KNN) to isolate a small, contextual group of documents (the "Foreground Set"). This gets us *close* — but "close" in vector space can span multiple meanings. For a query like `server`, the foreground set might include both tech infrastructure docs and restaurant docs. The dense hop is necessary but insufficient on its own.
+The three steps work the same way described in [The Wormhole Solution](#-the-wormhole-solution) above, with a few implementation details worth calling out:
 
-- **The SKG Facet (Keyword Extraction):** We use Solr's Semantic Knowledge Graph (SKG) `relatedness()` function to compare the foreground set against the background corpus (the full index) and ask: *"What specific words appear here way more often than they do in the background corpus?"* Think of it like walking into a room where everyone's talking about restaurants — you'd quickly pick up that words like `menu`, `tip`, and `dining` are common here but rare in the rest of the building. SKG does this statistically, extracting keywords that are highly significant to our specific context in real time. The KNN query and the SKG facet run in the *same* Solr request.
+- **The Dense Hop** calls the isolated top-15 documents the "Foreground Set." "Close" in vector space can still span multiple meanings — for a bare query like `server`, the foreground set might mix tech infrastructure docs with restaurant docs. The dense hop alone is necessary but insufficient.
 
-- **The Sparse Hop (Traditional Search):** We take those freshly derived terms and build a traditional keyword query (BM25), boosted by each term's relatedness score, to land precisely in the correct keyword domain. This is where the wormhole's value crystallizes: the dense hop got us close, the SKG facet told us *what vocabulary* defines that neighborhood, and the sparse hop uses that vocabulary to find exactly the right documents — explainably and precisely. The final results prioritize these sparse hits, backfilling from the dense set if needed.
+- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. Think of it like walking into a room where everyone's talking about restaurants — you'd quickly pick up that words like `menu`, `tip`, and `dining` are common here but rare in the rest of the building. SKG does this statistically, in real time.
+
+- **The Sparse Hop** boosts the BM25 query by each term's relatedness score. The final results prioritize sparse hits, backfilling from the dense set if needed.
 
 > **Note on stemmed terms:** The SKG terms shown above (`restaur`, `dine`, `attent`) are truncated by Solr's Porter stemmer during indexing and analysis — `restaurant` becomes `restaur`, `dining` becomes `dine`, `attentiveness` becomes `attent`. This is intentional: stemming collapses plural/singular and inflected forms into one token so that `server` and `servers` are treated as the same term for both matching and statistical significance.
 
