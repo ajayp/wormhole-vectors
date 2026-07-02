@@ -9,13 +9,13 @@ The idea: use a vector search to find the right neighborhood of documents, then 
 ## Table of Contents
 
 - [The Problem It Solves](#the-problem-it-solves)
-- [🚀 The Wormhole Solution](#-the-wormhole-solution)
-- [🧠 Concept Overview](#-concept-overview)
-- [🎯 Examples](#-examples)
-- [🛠️ Setup & Ingestion](#-setup--ingestion)
-- [⚙️ Configuration](#-configuration)
-- [📁 File Structure](#-file-structure)
-- [📺 Reference](#-reference)
+- [The Wormhole Solution](#the-wormhole-solution)
+- [Examples](#examples)
+- [Concept Overview](#concept-overview)
+- [Setup & Ingestion](#setup--ingestion)
+- [Configuration](#configuration)
+- [File Structure](#file-structure)
+- [Reference](#reference)
 
 ---
 
@@ -30,7 +30,7 @@ Today's common fix, "hybrid search," just runs both tracks in parallel and blend
 
 ---
 
-## 🚀 The Wormhole Solution
+## The Wormhole Solution
 
 A **Wormhole Vector** closes that gap by traversing through two search spaces sequentially — using the document set to hop from one to the other. Here's how it works:
 
@@ -43,7 +43,7 @@ A **Wormhole Vector** closes that gap by traversing through two search spaces se
 3. **Hop to Sparse Space:** Those keywords become a BM25 search (boosted by their relatedness scores).
    - *Result: Results land precisely in the hospitality domain — zero stray tech titles, and the SKG term list explains exactly why the pivot happened.*
 
-*(See [Concept Overview](#-concept-overview) for how each step is configured under the hood.)*
+*(See [Concept Overview](#concept-overview) for how each step is configured under the hood.)*
 
 #### Pipeline Architecture Comparison
 
@@ -66,7 +66,7 @@ graph LR
     style Out2 fill:#dcfce7,stroke:#22c55e
 ```
 
-> **SKG** = Semantic Knowledge Graph, Solr's built-in `relatedness()` function (see [Concept Overview](#-concept-overview) for the full mechanics).
+> **SKG** = Semantic Knowledge Graph, Solr's built-in `relatedness()` function (see [Concept Overview](#concept-overview) for the full mechanics).
 
 #### Approach Capability Matrix
 
@@ -81,79 +81,13 @@ graph LR
 
 ---
 
-## 🧠 Concept Overview
-
-The SKG step is where the wormhole bridge gets built. The key insight: it doesn't need an LLM to translate vectors back into words. Instead, it reuses the indexes a search engine already has — the forward index tells you which terms are in a given document, and the inverted index tells you which documents contain a given term. By walking from the foreground set of documents (via the forward index) out to their terms, then checking how often those terms show up across the rest of the corpus (via the inverted index), Solr can work out statistically which terms are unusually characteristic of this specific document set — no additional embeddings, no generative model, just counting.
-
-<details>
-<summary>Show the underlying scoring math</summary>
-
-SKG treats the search engine as a graph and asks: which terms are statistically significant in the Foreground Set (the documents the dense hop returned) compared to the background corpus (the rest of the index)? This isn't just raw term frequency — stopwords like "the" are frequent everywhere. Instead, it compares each term's probability of appearing in the foreground, `P(t|Foreground)`, against its probability of appearing in the background, `P(t|Background)`:
-
-```
-Score(t) = P(t|Foreground) / P(t|Background)
-```
-
-A high score means the term is disproportionately common in the foreground set relative to the rest of the corpus — i.e., it's part of the "vibe" the dense hop found.
-
-</details>
-
-The "wormhole" is created across two Solr round-trips:
-
-```mermaid
-graph TD
-    classDef input fill:#f1f5f9,stroke:#64748b,stroke-width:2px;
-    classDef dense fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px;
-    classDef bridge fill:#fef3c7,stroke:#d97706,stroke-width:2px;
-    classDef sparse fill:#ecfdf5,stroke:#059669,stroke-width:2px;
-
-    UserQuery(["User Types: 'server I ordered food from'"]):::input
-
-    subgraph "Round-trip 1: Dense Hop + SKG Facet"
-        VectorSpace[Convert to Embedding Vector]:::dense
-        KNN[Run KNN Match in Solr]:::dense
-        Foreground["Isolate Top 15 Documents<br/>(gets close, but spans meanings)"]:::dense
-        SKG["SKG Facet: Compare foreground vs. background corpus<br/>Which words are over-represented?"]:::bridge
-        Extract[Extract Statistically Significant Words:<br/><b>'restaur', 'dine', 'food', 'guest'</b>]:::bridge
-    end
-
-    subgraph "Round-trip 2: Sparse Hop"
-        BM25[Build New BM25 Keyword Query]:::sparse
-        Final[Deliver 100% Relevant Hospitality Results]:::sparse
-    end
-
-    UserQuery --> VectorSpace
-    VectorSpace --> KNN
-    KNN --> Foreground
-    Foreground -->|Feeds document set into| SKG
-    SKG --> Extract
-    Extract -->|Translates vector vibe into| BM25
-    BM25 --> Final
-```
-
-The three steps work the same way described in [The Wormhole Solution](#-the-wormhole-solution) above, with a few implementation details worth calling out:
-
-- **The Dense Hop** calls the isolated top-15 documents the "Foreground Set." "Close" in vector space can still span multiple meanings — for a bare query like `server`, the foreground set might mix tech infrastructure docs with restaurant docs. The dense hop alone is necessary but insufficient.
-
-- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. The forward/inverted index counting described above happens as a facet on that single request, so you get the dense results and the derived keywords back together.
-
-- **The Sparse Hop** boosts the BM25 query by each term's relatedness score. The final results prioritize sparse hits, backfilling from the dense set if needed.
-
-> **Note on stemmed terms:** The SKG terms shown above (`restaur`, `dine`, `attent`) are truncated by Solr's Porter stemmer during indexing and analysis — `restaurant` becomes `restaur`, `dining` becomes `dine`, `attentiveness` becomes `attent`. This is intentional: stemming collapses plural/singular and inflected forms into one token so that `server` and `servers` are treated as the same term for both matching and statistical significance.
-
-> **Note on ranking:** Within each hop, results are ordered by that hop's own relevance score (BM25 score for sparse, vector similarity for dense). But sparse and dense aren't on a shared scale — the merge step lists all sparse results first, then backfills remaining slots with dense results, without re-scoring one against the other. So a wormhole result's *position* in the final list reflects which hop found it and that hop's internal ranking, not a unified relevance score across both.
-
-> **Note on vocabulary gaps** *(conceptual — not demonstrated by this repo's demo corpus)*: Beyond disambiguation, the technique generally bridges zero-result lexical mismatches. Hypothetically, if an item were indexed as `Donut` and a user searched `sweet dough ring`, a wormhole hop through dense space would find it and map back to real keywords — without a hand-maintained synonym list. This repo's demo corpus focuses on term disambiguation instead (see [Examples](#-examples) below for what actually runs).
-
----
-
-## 🎯 Examples
+## Examples
 
 The sample corpus contains explicit contextual overlaps across four ambiguous terms: `Java`, `Mercury`, `Python`, and `server`. The examples below use both single-word and multi-word queries to demonstrate disambiguation, ranking quality, and explainability.
 
 Every example below runs the same raw query two ways: through the wormhole pipeline, and as a plain BM25 keyword search on the query string with nothing else applied — what you'd get without any of this.
 
-> Each `term(score)` pair is the SKG term and its `relatedness()` value (0.000–1.000) — how statistically over-represented that term is in the foreground set vs. the background corpus. See [Concept Overview](#-concept-overview) above for how these are derived, including the note on how they relate to result ranking.
+> Each `term(score)` pair is the SKG term and its `relatedness()` value (0.000–1.000) — how statistically over-represented that term is in the foreground set vs. the background corpus. See [Concept Overview](#concept-overview) below for how these are derived, including the note on how they relate to result ranking.
 
 ### Case 1: Ambiguity With Zero Context (`server`)
 
@@ -273,7 +207,73 @@ Together, Case 3 and Case 5 make the strongest version of the pitch: the *same* 
 
 ---
 
-## 🛠️ Setup & Ingestion
+## Concept Overview
+
+The SKG step is where the wormhole bridge gets built. The key insight: it doesn't need an LLM to translate vectors back into words. Instead, it reuses the indexes a search engine already has — the forward index tells you which terms are in a given document, and the inverted index tells you which documents contain a given term. By walking from the foreground set of documents (via the forward index) out to their terms, then checking how often those terms show up across the rest of the corpus (via the inverted index), Solr can work out statistically which terms are unusually characteristic of this specific document set — no additional embeddings, no generative model, just counting.
+
+<details>
+<summary>Show the underlying scoring math</summary>
+
+SKG treats the search engine as a graph and asks: which terms are statistically significant in the Foreground Set (the documents the dense hop returned) compared to the background corpus (the rest of the index)? This isn't just raw term frequency — stopwords like "the" are frequent everywhere. Instead, it compares each term's probability of appearing in the foreground, `P(t|Foreground)`, against its probability of appearing in the background, `P(t|Background)`:
+
+```
+Score(t) = P(t|Foreground) / P(t|Background)
+```
+
+A high score means the term is disproportionately common in the foreground set relative to the rest of the corpus — i.e., it's part of the "vibe" the dense hop found.
+
+</details>
+
+The "wormhole" is created across two Solr round-trips:
+
+```mermaid
+graph TD
+    classDef input fill:#f1f5f9,stroke:#64748b,stroke-width:2px;
+    classDef dense fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px;
+    classDef bridge fill:#fef3c7,stroke:#d97706,stroke-width:2px;
+    classDef sparse fill:#ecfdf5,stroke:#059669,stroke-width:2px;
+
+    UserQuery(["User Types: 'server I ordered food from'"]):::input
+
+    subgraph "Round-trip 1: Dense Hop + SKG Facet"
+        VectorSpace[Convert to Embedding Vector]:::dense
+        KNN[Run KNN Match in Solr]:::dense
+        Foreground["Isolate Top 15 Documents<br/>(gets close, but spans meanings)"]:::dense
+        SKG["SKG Facet: Compare foreground vs. background corpus<br/>Which words are over-represented?"]:::bridge
+        Extract[Extract Statistically Significant Words:<br/><b>'restaur', 'dine', 'food', 'guest'</b>]:::bridge
+    end
+
+    subgraph "Round-trip 2: Sparse Hop"
+        BM25[Build New BM25 Keyword Query]:::sparse
+        Final[Deliver 100% Relevant Hospitality Results]:::sparse
+    end
+
+    UserQuery --> VectorSpace
+    VectorSpace --> KNN
+    KNN --> Foreground
+    Foreground -->|Feeds document set into| SKG
+    SKG --> Extract
+    Extract -->|Translates vector vibe into| BM25
+    BM25 --> Final
+```
+
+The three steps work the same way described in [The Wormhole Solution](#the-wormhole-solution) above, with a few implementation details worth calling out:
+
+- **The Dense Hop** calls the isolated top-15 documents the "Foreground Set." "Close" in vector space can still span multiple meanings — for a bare query like `server`, the foreground set might mix tech infrastructure docs with restaurant docs. The dense hop alone is necessary but insufficient.
+
+- **The SKG Facet** runs in the *same* Solr request as the KNN query — it's not a separate round-trip. The forward/inverted index counting described above happens as a facet on that single request, so you get the dense results and the derived keywords back together.
+
+- **The Sparse Hop** boosts the BM25 query by each term's relatedness score. The final results prioritize sparse hits, backfilling from the dense set if needed.
+
+> **Note on stemmed terms:** The SKG terms shown above (`restaur`, `dine`, `attent`) are truncated by Solr's Porter stemmer during indexing and analysis — `restaurant` becomes `restaur`, `dining` becomes `dine`, `attentiveness` becomes `attent`. This is intentional: stemming collapses plural/singular and inflected forms into one token so that `server` and `servers` are treated as the same term for both matching and statistical significance.
+
+> **Note on ranking:** Within each hop, results are ordered by that hop's own relevance score (BM25 score for sparse, vector similarity for dense). But sparse and dense aren't on a shared scale — the merge step lists all sparse results first, then backfills remaining slots with dense results, without re-scoring one against the other. So a wormhole result's *position* in the final list reflects which hop found it and that hop's internal ranking, not a unified relevance score across both.
+
+> **Note on vocabulary gaps** *(conceptual — not demonstrated by this repo's demo corpus)*: Beyond disambiguation, the technique generally bridges zero-result lexical mismatches. Hypothetically, if an item were indexed as `Donut` and a user searched `sweet dough ring`, a wormhole hop through dense space would find it and map back to real keywords — without a hand-maintained synonym list. This repo's demo corpus focuses on term disambiguation instead (see [Examples](#examples) above for what actually runs).
+
+---
+
+## Setup & Ingestion
 
 ### Prerequisites
 
@@ -321,7 +321,7 @@ npm run test:all
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Operational settings, handled via local `.env` values:
 
@@ -334,7 +334,7 @@ Operational settings, handled via local `.env` values:
 
 ---
 
-## 📁 File Structure
+## File Structure
 
 ```
 wormhole-poc/
@@ -358,6 +358,6 @@ wormhole-poc/
 
 ---
 
-## 📺 Reference
+## Reference
 
 [Beyond Hybrid Search: Traversing Vector Spaces with Wormhole Vectors](https://www.youtube.com/watch?v=fvDC7nK-_C0) — the talk this repo implements.
