@@ -13,13 +13,18 @@ Traditional "hybrid search" setups simply run both tracks completely in parallel
 
 ### 🚀 The Wormhole Solution
 
-Instead of running two isolated tracks, a **Wormhole Vector**:
+Instead of running two isolated tracks, a **Wormhole Vector** traverses through two search spaces sequentially — using the document set to hop from one to the other. Here's how it works:
 
-1. Runs an initial AI vector search to find the documents matching the conceptual "vibe" of what you're looking for.
-2. Automatically extracts the best human-readable keywords *(real dictionary terms, not raw vector math — see [Concept Overview](#-concept-overview))* from those documents in real time.
-3. Uses *those* keywords to execute a highly precise traditional search.
+**Start in Dense Space:** User searches for `server I ordered food from`. The query is converted to a vector embedding, and Solr finds the 15 nearest documents.
+*Result: All results are about hospitality — the vector understood that "ordered food from" pulls `server` toward restaurant context, not tech.*
 
-*(See [Concept Overview](#-concept-overview) for how each step actually works under the hood.)*
+**Bridge via SKG:** Solr runs a Semantic Knowledge Graph `relatedness()` analysis on those documents — asking "what words show up here way more than in the background corpus?"
+*Result: Statistically significant terms emerge — `{restaur, dine, food, guest}`. These are human-readable keywords that represent the "vibe" the dense space found — no synonym list required.*
+
+**Hop to Sparse Space:** Those keywords become a BM25 search (boosted by their relatedness scores).
+*Result: Results land precisely in the hospitality domain — zero stray tech titles, and the SKG term list explains exactly why the pivot happened.*
+
+*(See [Concept Overview](#-concept-overview) for how each step is configured under the hood.)*
 
 #### Pipeline Architecture Comparison
 
