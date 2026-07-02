@@ -66,8 +66,6 @@ graph LR
     style Out2 fill:#dcfce7,stroke:#22c55e
 ```
 
-> **SKG** = Semantic Knowledge Graph, Solr's built-in `relatedness()` function (see [Concept Overview](#concept-overview) for the full mechanics).
-
 #### Approach Capability Matrix
 
 | Search Type | Captures Abstract Intent? | Fully Explainable? | Handles Ambiguity? |
