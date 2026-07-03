@@ -10,12 +10,12 @@
     "test:all": "tsx --test tests/*.test.ts tests/integration/**/*.test.ts"
   },
   "dependencies": {
-    "@huggingface/transformers": "latest",
-    "dotenv": "latest"
+    "@huggingface/transformers": "^4.2.0",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "tsx": "latest",
-    "typescript": "latest",
-    "@types/node": "latest"
+    "tsx": "^4.22.5",
+    "typescript": "^6.0.3",
+    "@types/node": "^26.1.0"
   }
 }
