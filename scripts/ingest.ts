@@ -1,9 +1,8 @@
-import * as dotenv from "dotenv";
 import { randomUUID } from "crypto";
 import { ensureCore, insertDocuments, Doc } from "../src/solr";
 import { embedBatch } from "../src/embed";
 
-dotenv.config();
+process.loadEnvFile();
 
 const RAW_DOCS = [
   // ── JAVA: Programming ────────────────────────────────────────────

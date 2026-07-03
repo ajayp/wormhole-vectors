@@ -1,12 +1,12 @@
-import * as dotenv from "dotenv";
 import { embedText } from "./embed";
 import { wormholeHop, bm25Search, SolrDoc, SkgTerm } from "./search";
 
-dotenv.config();
+process.loadEnvFile();
 
 export interface WormholeOpts {
   foregroundK?: number;
   finalK?: number;
+  core?: string;
 }
 
 export interface RankedDoc extends SolrDoc {
@@ -44,26 +44,33 @@ export function mergeWormholeResults(
   return merged;
 }
 
+/**
+ * Runs the wormhole pipeline: embed, dense hop + SKG, then sparse hop —
+ * unless the dense hop yields no SKG terms, in which case it returns
+ * dense-only results without running the sparse hop.
+ */
 export async function wormholeSearch(
   query: string,
   opts?: WormholeOpts
 ): Promise<SearchResult> {
   const fgK = opts?.foregroundK ?? parseInt(process.env.FOREGROUND_K ?? "15");
   const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
+  const core = opts?.core;
 
   // Step 1: embed query
   const vector = await embedText(query);
 
   // Step 2+3: dense retrieval + SKG in one request
-  const { docs: foregroundDocs, skgTerms } = await wormholeHop(vector, fgK);
+  const { docs: foregroundDocs, skgTerms } = await wormholeHop(vector, fgK, core);
 
   if (!skgTerms.length) {
     console.warn("SKG returned no terms — returning dense results only.");
-    return { query, skgTerms: [], finalResults: foregroundDocs.slice(0, finalK) };
+    const finalResults = foregroundDocs.slice(0, finalK).map((doc) => ({ ...doc, hop: "dense" as const }));
+    return { query, skgTerms: [], finalResults };
   }
 
   // Step 4: sparse traversal using derived terms
-  const sparseResults = await bm25Search(skgTerms, finalK);
+  const sparseResults = await bm25Search(skgTerms, finalK, core);
 
   // Step 5: sparse-first merge + dedupe, backfilled from dense
   const merged = mergeWormholeResults(sparseResults, foregroundDocs, finalK);

@@ -1,9 +1,36 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { bm25Search, baselineSearch, wormholeHop, escapeSolrTerm } from "../src/search";
 
 // Captured before any test below replaces global.fetch with a stub.
 const realFetch: typeof fetch = global.fetch;
+
+// The one test below that hits real Solr (not the fetch stub) needs its own guard —
+// it isn't part of tests/integration/ so it doesn't get integration.test.ts's skip
+// wrapper. Without this, an un-ingested core makes Solr return an HTML 404 page,
+// which fails as a confusing "Unexpected token '<'" JSON parse error instead of a
+// clean skip.
+const SOLR_URL = process.env.SOLR_URL ?? "http://localhost:8983/solr";
+let solrDemoReady = false;
+try {
+  const statusOut = execSync(
+    `curl -s "${SOLR_URL}/admin/cores?action=STATUS&core=wormhole_demo"`,
+    { timeout: 5000, encoding: "utf-8" }
+  );
+  const numDocs = JSON.parse(statusOut)?.status?.wormhole_demo?.index?.numDocs ?? 0;
+
+  const schemaOut = execSync(`curl -s "${SOLR_URL}/wormhole_demo/schema/fields/vector"`, {
+    timeout: 5000,
+    encoding: "utf-8",
+  });
+  const hasVectorField = JSON.parse(schemaOut)?.responseHeader?.status === 0;
+
+  solrDemoReady = numDocs > 0 && hasVectorField;
+} catch {
+  // Solr is down — the test below will skip.
+}
+const liveSolrSkipReason = solrDemoReady ? undefined : "live Solr + `npm run ingest` required";
 
 function stubFetch(responseBody: unknown) {
   const calls: Array<{ url: string; body: any }> = [];
@@ -104,14 +131,17 @@ test("wormholeHop extracts term + relatedness pairs from facet buckets", async (
 // Requires a live Solr instance with the corpus already ingested (docker compose up -d && npm run ingest).
 // Unlike the tests above, this hits real Solr to confirm the text_stem field type (src/solr.ts) actually
 // stems at index time, not just that our code builds the right query string.
-test("text_stem collapses plural/singular forms to one indexed token in Solr", async () => {
-  const solrUrl = process.env.SOLR_URL ?? "http://localhost:8983/solr";
-  const res = await realFetch(
-    `${solrUrl}/wormhole_demo/terms?terms.fl=text_terms&terms.prefix=server&terms.limit=20&wt=json`
-  );
-  const body = (await res.json()) as { terms: { text_terms: (string | number)[] } };
-  const terms = body.terms.text_terms.filter((_, i) => i % 2 === 0) as string[];
+test(
+  "text_stem collapses plural/singular forms to one indexed token in Solr",
+  { skip: liveSolrSkipReason },
+  async () => {
+    const res = await realFetch(
+      `${SOLR_URL}/wormhole_demo/terms?terms.fl=text_terms&terms.prefix=server&terms.limit=20&wt=json`
+    );
+    const body = (await res.json()) as { terms: { text_terms: (string | number)[] } };
+    const terms = body.terms.text_terms.filter((_, i) => i % 2 === 0) as string[];
 
-  assert.ok(terms.includes("server"), `expected stemmed token "server" among indexed terms: ${terms}`);
-  assert.ok(!terms.includes("servers"), `unstemmed "servers" should not exist as a separate token: ${terms}`);
-});
+    assert.ok(terms.includes("server"), `expected stemmed token "server" among indexed terms: ${terms}`);
+    assert.ok(!terms.includes("servers"), `unstemmed "servers" should not exist as a separate token: ${terms}`);
+  }
+);

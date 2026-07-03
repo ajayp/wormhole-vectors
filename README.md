@@ -301,6 +301,14 @@ npm run cli
 
 Type an intentionally ambiguous query to see wormhole vs. plain BM25 results side-by-side. Type `exit` or leave the line empty to quit.
 
+By default the CLI searches the `wormhole_demo` core. To search the [large-corpus](#large-corpus-validation-optional) `wormhole_large` core instead (after running `npm run ingest:large`), pass `--core`:
+
+```bash
+npm run cli -- --core=wormhole_large
+```
+
+The active core is shown in the banner and in every query prompt (e.g. `[wormhole_large] Query (or "exit"):`), so it's always clear which corpus a result set came from. `SOLR_CORE` env var works the same way if you prefer setting it once instead of passing the flag each run.
+
 ### Tests
 
 ```bash
@@ -319,6 +327,22 @@ npm run test:all
 
 **Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, and stemming invariants. They auto-skip with a clear message if Solr is unavailable.
 
+### Large-Corpus Validation (optional)
+
+The 135-doc demo corpus is hand-curated and perfectly balanced across four ambiguous terms — great for demonstrating the technique, but it doesn't tell you whether the pipeline *runs correctly* on real, messy text at scale, or whether its disambiguation *advantage over plain BM25* reproduces outside the curated setup. These are two different questions. `scripts/ingest-large.ts` and `tests/integration/large-corpus.test.ts` address both using ~1,000 real Stack Exchange Q&A posts (200/domain across `health`, `cooking`, `scifi`, `travel`, `devops`), sampled from data dumps in the [`solr-skg-ts`](https://github.com/ajayp/solr-semantic-knowledge-graph) repo, vendored here as a git submodule at `vendor/solr-skg-ts` (not fetched by a plain clone — see below). The pipeline runs correctly on this data; the disambiguation advantage does not — see below.
+
+```bash
+# One-time: fetch the vendored data submodule (large — ~160MB across 5 domains)
+git submodule update --init
+
+npm run ingest:large
+npm run test:integration:large
+```
+
+> **What this validates:** the pipeline survives **messy real-world text at ~7x scale** (HTML entities, typos, jargon, tangents) with coherent SKG terms and no drop in domain purity — hard-gated in the test suite. **What it doesn't:** wormhole's disambiguation edge over plain BM25, clearly visible in the curated demo above, doesn't reliably reproduce here — because this corpus lacks two properties the demo has (genuinely disjoint senses, and balanced representation per sense). That's a boundary condition, not a refutation — see `tests/integration/large-corpus.test.ts` for the full breakdown, the sample-size sensitivity check, and the one case (`cold`) codified as a passing negative-result assertion rather than an ignored failure.
+>
+> `LARGE_CORPUS_SAMPLE_SIZE` (default `200`/domain) trades off statistical stability against local embedding time (~5–15 min for ~1,000 docs on CPU); test thresholds use loose purity bands rather than exact matches to stay robust to that noise.
+
 ---
 
 ## Configuration
@@ -331,6 +355,7 @@ These are operational settings, set via local `.env` values:
 | `FOREGROUND_K` | `15` | Size of dense KNN result set used to derive SKG terms |
 | `SKG_LIMIT` | `8` | Maximum number of SKG terms extracted from the foreground set |
 | `FINAL_K` | `5` | Total number of results displayed per search operation |
+| `LARGE_CORPUS_SAMPLE_SIZE` | `200` | Docs sampled per domain for the optional large-corpus validation path (see below) |
 
 ---
 
@@ -348,12 +373,14 @@ wormhole-poc/
 │   ├── wormhole.ts         # Orchestrates the dense→SKG→sparse pipeline
 │   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
-│   └── ingest.ts           # Seeds the demo corpus into Solr
+│   ├── ingest.ts           # Seeds the demo corpus into Solr
+│   └── ingest-large.ts     # Seeds the optional large real-text corpus into Solr
 └── tests/
-    ├── search.test.ts            # Query-building unit tests (mocked fetch)
-    ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)
+    ├── search.test.ts             # Query-building unit tests (mocked fetch)
+    ├── wormhole.test.ts           # Merge-logic unit tests (pure functions)
     └── integration/
-        └── integration.test.ts   # End-to-end live Solr retrieval tests
+        ├── integration.test.ts    # End-to-end live Solr retrieval tests (demo corpus)
+        └── large-corpus.test.ts   # Statistical retrieval tests (large real-text corpus)
 ```
 
 ---

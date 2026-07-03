@@ -12,9 +12,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import * as dotenv from "dotenv";
 
-dotenv.config();
+process.loadEnvFile();
 
 import { wormholeSearch } from "../../src/wormhole";
 import { baselineSearch, wormholeHop } from "../../src/search";
@@ -24,15 +23,26 @@ const SOLR_URL = process.env.SOLR_URL ?? "http://localhost:8983/solr";
 const FINAL_K = 5;
 
 // Synchronous Solr liveness check — avoids top-level await (unsupported in CJS).
-// Returns true only if Solr responds AND the wormhole_demo core has > 0 docs.
+// Returns true only if Solr responds, the wormhole_demo core has > 0 docs, AND
+// its schema actually has the "vector" field — a stale core can have leftover
+// docs from an older/different schema and pass a numDocs-only check, then fail
+// every test mid-run with a confusing "undefined field: vector" 400 instead of
+// a clean skip.
 let solrAlive = false;
 try {
-  const out = execSync(
+  const statusOut = execSync(
     `curl -s "${SOLR_URL}/admin/cores?action=STATUS&core=wormhole_demo"`,
     { timeout: 5000, encoding: "utf-8" }
   );
-  const numDocs = JSON.parse(out)?.status?.wormhole_demo?.index?.numDocs ?? 0;
-  solrAlive = numDocs > 0;
+  const numDocs = JSON.parse(statusOut)?.status?.wormhole_demo?.index?.numDocs ?? 0;
+
+  const schemaOut = execSync(`curl -s "${SOLR_URL}/wormhole_demo/schema/fields/vector"`, {
+    timeout: 5000,
+    encoding: "utf-8",
+  });
+  const hasVectorField = JSON.parse(schemaOut)?.responseHeader?.status === 0;
+
+  solrAlive = numDocs > 0 && hasVectorField;
 } catch {
   // Solr is down — tests below will each skip.
 }
