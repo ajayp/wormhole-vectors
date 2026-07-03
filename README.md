@@ -2,7 +2,7 @@
 
 **Search "java" and get programming results when that's what you mean, or coffee results when it's not — automatically, without synonym lists.**
 
-This project is a Proof of Concept (PoC) implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. 
+This project is a PoC implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. 
 
 The idea: use a vector search to find the right neighborhood of documents, then let those documents tell you which keywords to search with — so the second search is guided by the first, not running blind on the raw query. Built on Apache Solr.
 
@@ -170,13 +170,13 @@ Unlike the other cases, `restaurant` isn't an ambiguous term — this one shows 
 Query: restaurant
 SKG terms: [restaur(0.067), servic(0.061), server(0.060), guest(0.055), dine(0.048), attent(0.040), clear(0.040), contact(0.040)]
 
-Wormhole Results                       │ Plain BM25 Search
---------------------------------------─┼─--------------------------------------
-Restaurant Server Training Guide       │ Server Tip Pooling Policies
-Fine Dining Table Service Etiquette    │ Restaurant Server Training Guide
-Server Burnout in the Restaurant Ind.  │ Bar and Restaurant Server Teamwork
-Bar and Restaurant Server Teamwork     │ Server Burnout in the Restaurant Ind.
-Upselling Techniques for Restaurant    │ Shift Work and Server Scheduling
+Wormhole Results                               │ Plain BM25 Search
+-----------------------------------------------─┼─-----------------------------------------
+Restaurant Server Training Guide               │ Server Tip Pooling Policies
+Fine Dining Table Service Etiquette            │ Restaurant Server Training Guide
+Server Burnout in the Restaurant Industry      │ Bar and Restaurant Server Teamwork
+Bar and Restaurant Server Teamwork             │ Server Burnout in the Restaurant Industry
+Upselling Techniques for Restaurant Servers    │ Shift Work and Server Scheduling
 ```
 
 Not every case is a domain-purity blowout like Case 3 — here, both columns land in hospitality, so there's no stray result to point at. The win is more subtle but still real:
