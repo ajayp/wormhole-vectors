@@ -25,6 +25,8 @@ export interface IterativeOpts {
   maxHops?: number;
   minNewDocs?: number;
   core?: string;
+  /** Injection seam for tests — defaults to the real embedText. */
+  embed?: (text: string) => Promise<number[]>;
 }
 
 // "Repeat as needed" (29:07): bounce between dense and sparse spaces,
@@ -42,6 +44,7 @@ export async function iterativeWormholeSearch(
   const maxHops = opts?.maxHops ?? parseInt(process.env.MAX_HOPS ?? "4");
   const minNewDocs = opts?.minNewDocs ?? 2;
   const core = opts?.core;
+  const embed = opts?.embed ?? embedText;
 
   const seen = new Set<string>();
   const accumulated: IteratedDoc[] = [];
@@ -60,7 +63,7 @@ export async function iterativeWormholeSearch(
     return newDocs;
   };
 
-  const vector = await embedText(query);
+  const vector = await embed(query);
   const { docs: hop1Docs, skgTerms } = await wormholeHop(vector, fgK, { core });
   recordHop(1, hop1Docs);
 

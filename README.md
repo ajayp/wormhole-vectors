@@ -413,7 +413,7 @@ npm run test:integration
 npm run test:all
 ```
 
-**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), vector pooling/specificity math (`pool.ts`), the synthetic interaction matrix (`scripts/interactions.ts`), and matrix factorization (`mf.ts` — reconstruction error decreases, item vectors are unit-norm, persona-linked categories end up behaviorally closer than unlinked ones) using mocked Solr responses and pure-function inputs. No live instance needed.
+**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), vector pooling/specificity math (`pool.ts`), the synthetic interaction matrix (`scripts/interactions.ts`), matrix factorization (`mf.ts` — reconstruction error decreases, item vectors are unit-norm, persona-linked categories end up behaviorally closer than unlinked ones), and iterative hopping (`iterate.ts` — hop sequencing, convergence, dedup, `core` threading) using mocked Solr responses and pure-function inputs. No live instance needed.
 
 **Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), SKG category alignment, iterative-hop convergence, and behavioral serendipity (a coffee query surfaces persona-linked hospitality docs without leaking into unlinked domains). They auto-skip with a clear message if Solr is unavailable.
 
@@ -477,6 +477,7 @@ wormhole-poc/
     ├── pool.test.ts              # Vector pooling/specificity unit tests (pure functions)
     ├── interactions.test.ts      # Synthetic interaction matrix unit tests
     ├── mf.test.ts                # Matrix factorization unit tests
+    ├── iterate.test.ts           # Iterative hopping unit tests (mocked fetch + injected embed)
     └── integration/
         ├── integration.test.ts    # End-to-end live Solr retrieval tests (demo corpus)
         └── large-corpus.test.ts   # Statistical retrieval tests (large real-text corpus)
