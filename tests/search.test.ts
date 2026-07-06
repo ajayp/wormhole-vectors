@@ -98,7 +98,32 @@ test("wormholeHop extracts term + relatedness pairs from facet buckets", async (
     { term: "server", relatedness: 0.9 },
     { term: "rack", relatedness: 0.4 },
   ]);
+  assert.deepEqual(result.skgCategories, []);
   assert.equal(result.docs.length, 1);
+});
+
+test("wormholeHop extracts category buckets alongside term buckets", async () => {
+  stubFetch({
+    response: { docs: [{ id: "1", title: "t", text: "x" }] },
+    facets: {
+      wormhole_terms: {
+        buckets: [{ val: "server", relatedness: { relatedness: 0.9 } }],
+      },
+      wormhole_categories: {
+        buckets: [
+          { val: "java_programming", relatedness: { relatedness: 0.34 } },
+          { val: "server_tech", relatedness: { relatedness: 0.12 } },
+        ],
+      },
+    },
+  });
+
+  const result = await wormholeHop([0.1, 0.2], 10);
+
+  assert.deepEqual(result.skgCategories, [
+    { term: "java_programming", relatedness: 0.34 },
+    { term: "server_tech", relatedness: 0.12 },
+  ]);
 });
 
 test("wormholeHop requests the vector field when withVectors is set", async () => {
@@ -136,6 +161,53 @@ test("denseSearch runs a plain KNN query with no facet", async () => {
   assert.equal(calls[0].body.query, "{!knn f=vector topK=5}[0.1,0.2]");
   assert.equal(calls[0].body.facet, undefined);
   assert.equal(docs.length, 1);
+});
+
+test("bm25Search ORs in category clauses when provided", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await bm25Search(
+    [{ term: "server", relatedness: 0.9 }],
+    5,
+    { categories: [{ term: "java_programming", relatedness: 0.34 }] }
+  );
+
+  assert.equal(
+    calls[0].body.query,
+    'text_terms:server^0.9 OR source:"java_programming"^0.34'
+  );
+});
+
+test("bm25Search drops non-positive relatedness terms and categories (Solr boost must be positive)", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await bm25Search(
+    [
+      { term: "server", relatedness: 0.9 },
+      { term: "rack", relatedness: -0.02 },
+    ],
+    5,
+    {
+      categories: [
+        { term: "java_programming", relatedness: 0.34 },
+        { term: "java_coffee", relatedness: -0.01 },
+      ],
+    }
+  );
+
+  assert.equal(
+    calls[0].body.query,
+    'text_terms:server^0.9 OR source:"java_programming"^0.34'
+  );
+});
+
+test("bm25Search returns empty array without calling Solr when every term/category is non-positive", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  const result = await bm25Search([{ term: "rack", relatedness: -0.02 }], 5);
+
+  assert.deepEqual(result, []);
+  assert.equal(calls.length, 0);
 });
 
 test("baselineSearch requests the vector field when withVectors is set", async () => {

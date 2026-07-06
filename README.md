@@ -231,6 +231,23 @@ Specialty Coffee Roasters and Java [D]      │ Java Coffee Origins
 
 Because the sparse foreground is raw BM25 with no SKG disambiguation, this direction inherits BM25's literal-matching blind spot: if the keyword search's own top results are mixed across domains, pooling them produces a muddier wormhole vector than the dense→sparse direction gets from its SKG-derived terms. It's a real hop, not a guaranteed fix.
 
+### Query Specificity
+
+Alongside the SKG terms, the dense→sparse pipeline now measures how tightly the foreground set clusters: the mean cosine similarity of each foreground document's embedding to the pooled centroid of the set (61:29 in the talk). A context-free query like `server` spans two unrelated domains (tech and hospitality) and scores low; a query that lands squarely in one domain scores higher.
+
+```
+Query: server
+SKG category: server_hospitality(0.049), server_tech(0.040)
+SKG terms: [server(0.066), allergen(0.040), attent(0.040), ...]
+specificity: 0.556 (broad)
+```
+
+When the query is broad (below `SPECIFICITY_THRESHOLD`, default `0.6`), the sparse hop fetches a wider candidate set (`2 × FINAL_K`) before merging — a POC-scale version of the talk's "search a region, not a point," so a broad query isn't artificially collapsed down to a handful of results from one lucky corner of the foreground.
+
+### Multi-Field SKG
+
+The SKG facet used to derive keyword terms also runs a second sub-facet over the `source` field — the same `relatedness($fore,$back)` statistic, applied to a categorical field instead of a text field, mirroring the talk's `category:Korean + terms` example (69:43). It surfaces which document category the foreground set is statistically leaning toward, printed above the term list (`SKG category: java_programming(0.082), java_coffee(0.001)`). `bm25Search` also accepts an optional `categories` boost clause (`source:"java_programming"^0.082 OR ...`) for callers that want to combine category and term signals in one structured query — the demo pipeline itself doesn't wire it in by default, since term relatedness is currently the more reliable disambiguation signal for this corpus.
+
 ---
 
 ## Concept Overview
@@ -346,9 +363,9 @@ npm run test:integration
 npm run test:all
 ```
 
-**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), and vector pooling math (`pool.ts`) using mocked Solr responses and pure-function inputs. They verify that the right fields, boosts, and escaping are applied — no live instance needed.
+**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), and vector pooling/specificity math (`pool.ts`) using mocked Solr responses and pure-function inputs. They verify that the right fields, boosts, and escaping are applied — no live instance needed.
 
-**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, and sparse→dense pooling landing in the right dense neighborhood. They auto-skip with a clear message if Solr is unavailable.
+**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), and SKG category alignment. They auto-skip with a clear message if Solr is unavailable.
 
 ---
 
@@ -362,6 +379,7 @@ These are operational settings, set via local `.env` values:
 | `FOREGROUND_K` | `15` | Size of dense KNN result set used to derive SKG terms |
 | `SKG_LIMIT` | `8` | Maximum number of SKG terms extracted from the foreground set |
 | `FINAL_K` | `5` | Total number of results displayed per search operation |
+| `SPECIFICITY_THRESHOLD` | `0.6` | Below this mean-cosine-to-centroid score, a query is treated as "broad" and the sparse hop fetch is widened |
 
 ---
 
@@ -376,7 +394,7 @@ wormhole-poc/
 │   ├── embed.ts            # Local text-to-vector embedding (Xenova)
 │   ├── solr.ts             # Schema setup for the Solr core
 │   ├── search.ts           # Dense, BM25, and SKG query builders
-│   ├── pool.ts             # Vector pooling (mean + L2 norm)
+│   ├── pool.ts             # Vector pooling (mean + L2 norm) and foreground specificity
 │   ├── wormhole.ts         # Orchestrates the dense↔sparse pipelines (both directions)
 │   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
@@ -384,7 +402,7 @@ wormhole-poc/
 └── tests/
     ├── search.test.ts            # Query-building unit tests (mocked fetch)
     ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)
-    ├── pool.test.ts              # Vector pooling unit tests (pure functions)
+    ├── pool.test.ts              # Vector pooling/specificity unit tests (pure functions)
     └── integration/
         └── integration.test.ts   # End-to-end live Solr retrieval tests
 ```

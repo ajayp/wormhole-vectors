@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
 import { embedText } from "./embed";
-import { poolVectors } from "./pool";
+import { poolVectors, foregroundSpecificity } from "./pool";
 import {
   wormholeHop,
   bm25Search,
@@ -26,6 +26,9 @@ export interface RankedDoc extends SolrDoc {
 export interface SearchResult {
   query: string;
   skgTerms: SkgTerm[];
+  skgCategories: SkgTerm[];
+  specificity: number;
+  broad: boolean;
   finalResults: RankedDoc[];
 }
 
@@ -92,6 +95,8 @@ export function mergeWormholeResultsDenseFirst(
   );
 }
 
+const SPECIFICITY_THRESHOLD = parseFloat(process.env.SPECIFICITY_THRESHOLD ?? "0.6");
+
 export async function wormholeSearch(
   query: string,
   opts?: WormholeOpts
@@ -102,25 +107,43 @@ export async function wormholeSearch(
   // Step 1: embed query
   const vector = await embedText(query);
 
-  // Step 2+3: dense retrieval + SKG in one request
-  const { docs: foregroundDocs, skgTerms } = await wormholeHop(vector, fgK);
+  // Step 2+3: dense retrieval + SKG in one request (with vectors, to measure
+  // how tightly the foreground set clusters around its own centroid)
+  const { docs: foregroundDocs, skgTerms, skgCategories } = await wormholeHop(vector, fgK, {
+    withVectors: true,
+  });
+
+  const foregroundVectors = foregroundDocs.filter((d) => d.vector).map((d) => d.vector!);
+  const specificity = foregroundVectors.length ? foregroundSpecificity(foregroundVectors) : 1;
+  const broad = specificity < SPECIFICITY_THRESHOLD;
 
   if (!skgTerms.length) {
     console.warn("SKG returned no terms — returning dense results only.");
     return {
       query,
       skgTerms: [],
+      skgCategories,
+      specificity,
+      broad,
       finalResults: foregroundDocs.slice(0, finalK).map((d) => ({ ...d, hop: "dense" as const })),
     };
   }
 
-  // Step 4: sparse traversal using derived terms
-  const sparseResults = await bm25Search(skgTerms, finalK);
+  // Step 4: sparse traversal using derived terms. A broad query's foreground
+  // doesn't cluster around one point, so widen the fetch before merging —
+  // the POC-scale version of "search a region, not a point."
+  //
+  // Note: skgCategories is surfaced for display and available as an opt-in
+  // boost via bm25Search's `categories` option, but isn't applied here —
+  // category relatedness is a noisier signal than term relatedness and can
+  // tip already-correct term-based disambiguation the wrong way.
+  const sparseFetchK = broad ? finalK * 2 : finalK;
+  const sparseResults = await bm25Search(skgTerms, sparseFetchK);
 
   // Step 5: sparse-first merge + dedupe, backfilled from dense
   const merged = mergeWormholeResults(sparseResults, foregroundDocs, finalK);
 
-  return { query, skgTerms, finalResults: merged };
+  return { query, skgTerms, skgCategories, specificity, broad, finalResults: merged };
 }
 
 // The talk's "easy direction" (52:17): keyword search → average top-N doc

@@ -35,10 +35,20 @@ async function runDenseToSparse(q: string) {
     baselineSearch(q, FINAL_K),
   ]);
 
+  if (wormhole.skgCategories.length) {
+    const categoryDisplay = wormhole.skgCategories
+      .map((c) => `${c.term}(${c.relatedness.toFixed(3)})`)
+      .join(", ");
+    console.log(`SKG category: ${categoryDisplay}`);
+  }
+
   const skgDisplay = wormhole.skgTerms
     .map((t) => `${t.term}(${t.relatedness.toFixed(3)})`)
     .join(", ");
-  console.log(`SKG terms: [${skgDisplay}]\n`);
+  console.log(`SKG terms: [${skgDisplay}]`);
+
+  const specificityLabel = wormhole.broad ? "broad" : "specific";
+  console.log(`specificity: ${wormhole.specificity.toFixed(3)} (${specificityLabel})\n`);
 
   printSideBySide(wormhole.finalResults, baseline);
 }

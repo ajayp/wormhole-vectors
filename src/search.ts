@@ -21,6 +21,7 @@ export interface SkgTerm {
 export interface WormholeHopResult {
   docs: SolrDoc[];
   skgTerms: SkgTerm[];
+  skgCategories: SkgTerm[];
 }
 
 export interface SearchOpts {
@@ -58,8 +59,8 @@ function buildKnnQuery(vector: number[], k: number): string {
 }
 
 // Plain KNN dense search — no SKG facet. The pooled-vector counterpart to
-// wormholeHop's dense+facet request, used for the sparse→dense hop where no
-// new SKG terms are needed from this leg.
+// wormholeHop's dense+facet request, used for the sparse→dense hop and
+// iterative traversal, where no new SKG terms are needed from this leg.
 export async function denseSearch(
   vector: number[],
   k: number,
@@ -99,30 +100,51 @@ export async function wormholeHop(
           relatedness: { type: "func", func: "relatedness($fore,$back)" },
         },
       },
+      wormhole_categories: {
+        type: "terms",
+        field: "source",
+        limit: 2,
+        sort: { relatedness: "desc" },
+        facet: {
+          relatedness: { type: "func", func: "relatedness($fore,$back)" },
+        },
+      },
     },
   })) as {
     response: { docs: Array<Record<string, unknown>> };
     facets?: {
       wormhole_terms?: { buckets: Array<{ val: string; relatedness: { relatedness: number } }> };
+      wormhole_categories?: { buckets: Array<{ val: string; relatedness: { relatedness: number } }> };
     };
   };
 
   const docs = normalizeDocs(response.response.docs);
-  const buckets = response.facets?.wormhole_terms?.buckets ?? [];
-  const skgTerms = buckets.map((b) => ({ term: b.val, relatedness: b.relatedness.relatedness }));
+  const termBuckets = response.facets?.wormhole_terms?.buckets ?? [];
+  const categoryBuckets = response.facets?.wormhole_categories?.buckets ?? [];
+  const skgTerms = termBuckets.map((b) => ({ term: b.val, relatedness: b.relatedness.relatedness }));
+  const skgCategories = categoryBuckets.map((b) => ({ term: b.val, relatedness: b.relatedness.relatedness }));
 
-  return { docs, skgTerms };
+  return { docs, skgTerms, skgCategories };
 }
 
 export async function bm25Search(
   terms: SkgTerm[],
   k: number,
-  opts?: SearchOpts
+  opts?: SearchOpts & { categories?: SkgTerm[] }
 ): Promise<SolrDoc[]> {
   if (!terms.length) return [];
-  const queryString = terms
-    .map((t) => `text_terms:${escapeSolrTerm(t.term)}^${t.relatedness}`)
-    .join(" OR ");
+
+  // relatedness() can be negative (term/category is under-represented in the
+  // foreground vs. background) — Solr's `^boost` syntax requires a positive
+  // float, and a negative signal isn't one we want to boost by anyway.
+  const termClauses = terms
+    .filter((t) => t.relatedness > 0)
+    .map((t) => `text_terms:${escapeSolrTerm(t.term)}^${t.relatedness}`);
+  const categoryClauses = (opts?.categories ?? [])
+    .filter((c) => c.relatedness > 0)
+    .map((c) => `source:"${escapeSolrTerm(c.term)}"^${c.relatedness}`);
+  if (!termClauses.length && !categoryClauses.length) return [];
+  const queryString = [...termClauses, ...categoryClauses].join(" OR ");
 
   const response = (await solrPost(`/${CORE}/select`, {
     query: queryString,

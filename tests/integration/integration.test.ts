@@ -390,3 +390,24 @@ integrationTest("'s2d: coffee bean roast' pools into the java_coffee dense neigh
     assert.equal(doc.source, "java_coffee", `result "${doc.title}" has source "${doc.source}"`);
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// PHASE B: Query specificity + multi-field SKG
+// ──────────────────────────────────────────────────────────────────────
+
+integrationTest("broad query ('server') yields lower specificity than a specific one ('java garbage collection')", async () => {
+  const broad = await wormholeSearch("server", { finalK: FINAL_K });
+  const specific = await wormholeSearch("java garbage collection", { finalK: FINAL_K });
+
+  assert.ok(
+    broad.specificity < specific.specificity,
+    `expected broad (${broad.specificity}) < specific (${specific.specificity})`
+  );
+});
+
+integrationTest("SKG category matches the dominant source of the foreground ('Java' → java_programming)", async () => {
+  const result = await wormholeSearch("Java", { finalK: FINAL_K });
+
+  assert.ok(result.skgCategories.length > 0, "expected at least one SKG category");
+  assert.equal(result.skgCategories[0].term, "java_programming");
+});
