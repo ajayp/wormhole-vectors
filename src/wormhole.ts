@@ -1,4 +1,3 @@
-import * as dotenv from "dotenv";
 import { embedText } from "./embed";
 import { poolVectors, foregroundSpecificity } from "./pool";
 import {
@@ -10,11 +9,12 @@ import {
   SkgTerm,
 } from "./search";
 
-dotenv.config();
+process.loadEnvFile();
 
 export interface WormholeOpts {
   foregroundK?: number;
   finalK?: number;
+  core?: string;
 }
 
 export type Hop = "sparse" | "dense" | "behavioral";
@@ -119,12 +119,18 @@ export function mergeWormholeResultsDenseFirst(
 
 const SPECIFICITY_THRESHOLD = parseFloat(process.env.SPECIFICITY_THRESHOLD ?? "0.6");
 
+/**
+ * Runs the wormhole pipeline: embed, dense hop + SKG, then sparse hop —
+ * unless the dense hop yields no SKG terms, in which case it returns
+ * dense-only results without running the sparse hop.
+ */
 export async function wormholeSearch(
   query: string,
   opts?: WormholeOpts
 ): Promise<SearchResult> {
   const fgK = opts?.foregroundK ?? parseInt(process.env.FOREGROUND_K ?? "15");
   const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
+  const core = opts?.core;
 
   // Step 1: embed query
   const vector = await embedText(query);
@@ -133,6 +139,7 @@ export async function wormholeSearch(
   // how tightly the foreground set clusters around its own centroid)
   const { docs: foregroundDocs, skgTerms, skgCategories } = await wormholeHop(vector, fgK, {
     withVectors: true,
+    core,
   });
 
   const foregroundVectors = foregroundDocs.filter((d) => d.vector).map((d) => d.vector!);
@@ -160,7 +167,7 @@ export async function wormholeSearch(
   // category relatedness is a noisier signal than term relatedness and can
   // tip already-correct term-based disambiguation the wrong way.
   const sparseFetchK = broad ? finalK * 2 : finalK;
-  const sparseResults = await bm25Search(skgTerms, sparseFetchK);
+  const sparseResults = await bm25Search(skgTerms, sparseFetchK, { core });
 
   // Step 5: sparse-first merge + dedupe, backfilled from dense
   const merged = mergeWormholeResults(sparseResults, foregroundDocs, finalK);
@@ -176,9 +183,10 @@ export async function wormholeSearchSparseToDense(
 ): Promise<SparseToDenseResult> {
   const fgK = opts?.foregroundK ?? parseInt(process.env.FOREGROUND_K ?? "15");
   const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
+  const core = opts?.core;
 
   // Step 1: BM25 on the raw query, with vectors so we can pool them
-  const foregroundDocs = await baselineSearch(query, fgK, { withVectors: true });
+  const foregroundDocs = await baselineSearch(query, fgK, { withVectors: true, core });
   const foregroundVectors = foregroundDocs.filter((d) => d.vector).map((d) => d.vector!);
 
   if (!foregroundVectors.length) {
@@ -194,7 +202,7 @@ export async function wormholeSearchSparseToDense(
   const pooled = poolVectors(foregroundVectors);
 
   // Step 3: KNN on the pooled vector
-  const denseResults = await denseSearch(pooled, finalK);
+  const denseResults = await denseSearch(pooled, finalK, { core });
 
   // Step 4: dense-first merge + dedupe, backfilled from sparse
   const merged = mergeWormholeResultsDenseFirst(denseResults, foregroundDocs, finalK);
@@ -205,12 +213,12 @@ export async function wormholeSearchSparseToDense(
 // Pool the docs' behavior_vector embeddings into a single wormhole vector and
 // KNN it in the behavioral space — items whose *audience* overlaps the
 // foreground's, whether or not they share meaning or keywords.
-export async function behavioralHop(docs: SolrDoc[], k: number): Promise<SolrDoc[]> {
+export async function behavioralHop(docs: SolrDoc[], k: number, core?: string): Promise<SolrDoc[]> {
   const behaviorVectors = docs.filter((d) => d.behavior_vector).map((d) => d.behavior_vector!);
   if (!behaviorVectors.length) return [];
 
   const pooled = poolVectors(behaviorVectors);
-  return denseSearch(pooled, k, { field: "behavior_vector" });
+  return denseSearch(pooled, k, { field: "behavior_vector", core });
 }
 
 // The talk's third hoppable space (40:39–45:36): text meaning → behavioral
@@ -223,10 +231,11 @@ export async function wormholeSearchBehavioral(
 ): Promise<BehavioralResult> {
   const fgK = opts?.foregroundK ?? parseInt(process.env.FOREGROUND_K ?? "15");
   const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
+  const core = opts?.core;
 
   // Step 1: dense first hop in text-embedding space, carrying behavior vectors
   const vector = await embedText(query);
-  const foregroundDocs = await denseSearch(vector, fgK, { withBehaviorVectors: true });
+  const foregroundDocs = await denseSearch(vector, fgK, { withBehaviorVectors: true, core });
   const pooledFrom = foregroundDocs.filter((d) => d.behavior_vector).length;
 
   if (!pooledFrom) {
@@ -243,7 +252,7 @@ export async function wormholeSearchBehavioral(
   // same meaning), so fetch past them and keep only docs the dense hop did
   // NOT find — the serendipitous remainder is the behavioral contribution.
   const foregroundIds = new Set(foregroundDocs.map((d) => d.id));
-  const behavioralCandidates = await behavioralHop(foregroundDocs, fgK + finalK);
+  const behavioralCandidates = await behavioralHop(foregroundDocs, fgK + finalK, core);
   const behavioralResults = behavioralCandidates
     .filter((d) => !foregroundIds.has(d.id))
     .slice(0, finalK);

@@ -1,0 +1,3 @@
+[submodule "vendor/solr-skg-ts"]
+	path = vendor/solr-skg-ts
+	url = git@github.com:ajayp/solr-semantic-knowledge-graph.git

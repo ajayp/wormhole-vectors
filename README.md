@@ -2,7 +2,7 @@
 
 **Search "java" and get programming results when that's what you mean, or coffee results when it's not — automatically, without synonym lists.**
 
-This project is a Proof of Concept (PoC) implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. 
+This project is a PoC implementing **Wormhole Vectors** — a search retrieval technique proposed by Trey Grainger. 
 
 The idea: use a vector search to find the right neighborhood of documents, then let those documents tell you which keywords to search with — so the second search is guided by the first, not running blind on the raw query. Built on Apache Solr.
 
@@ -171,13 +171,13 @@ Unlike the other cases, `restaurant` isn't an ambiguous term — this one shows 
 Query: restaurant
 SKG terms: [restaur(0.067), servic(0.061), server(0.060), guest(0.055), dine(0.048), attent(0.040), clear(0.040), contact(0.040)]
 
-Wormhole Results                       │ Plain BM25 Search
---------------------------------------─┼─--------------------------------------
-Restaurant Server Training Guide       │ Server Tip Pooling Policies
-Fine Dining Table Service Etiquette    │ Restaurant Server Training Guide
-Server Burnout in the Restaurant Ind.  │ Bar and Restaurant Server Teamwork
-Bar and Restaurant Server Teamwork     │ Server Burnout in the Restaurant Ind.
-Upselling Techniques for Restaurant    │ Shift Work and Server Scheduling
+Wormhole Results                               │ Plain BM25 Search
+-----------------------------------------------─┼─-----------------------------------------
+Restaurant Server Training Guide               │ Server Tip Pooling Policies
+Fine Dining Table Service Etiquette            │ Restaurant Server Training Guide
+Server Burnout in the Restaurant Industry      │ Bar and Restaurant Server Teamwork
+Bar and Restaurant Server Teamwork             │ Server Burnout in the Restaurant Industry
+Upselling Techniques for Restaurant Servers    │ Shift Work and Server Scheduling
 ```
 
 Not every case is a domain-purity blowout like Case 3 — here, both columns land in hospitality, so there's no stray result to point at. The win is more subtle but still real:
@@ -391,6 +391,14 @@ Prefix a query to switch traversal direction (see [Other Traversal Directions](#
 - `iter: <query>` — iterative hopping across rounds
 - `behave: <query>` — dense → behavioral space (serendipity)
 
+By default the CLI searches the `wormhole_demo` core. To search the [large-corpus](#large-corpus-validation-optional) `wormhole_large` core instead (after running `npm run ingest:large`), pass `--core`:
+
+```bash
+npm run cli -- --core=wormhole_large
+```
+
+The active core is shown in the banner and in every query prompt (e.g. `[wormhole_large] Query (or "exit"):`), so it's always clear which corpus a result set came from. `SOLR_CORE` env var works the same way if you prefer setting it once instead of passing the flag each run.
+
 ### Tests
 
 ```bash
@@ -409,6 +417,22 @@ npm run test:all
 
 **Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), SKG category alignment, iterative-hop convergence, and behavioral serendipity (a coffee query surfaces persona-linked hospitality docs without leaking into unlinked domains). They auto-skip with a clear message if Solr is unavailable.
 
+### Large-Corpus Validation (optional)
+
+The 135-doc demo corpus is hand-curated and perfectly balanced across four ambiguous terms — great for demonstrating the technique, but it doesn't tell you whether the pipeline *runs correctly* on real, messy text at scale, or whether its disambiguation *advantage over plain BM25* reproduces outside the curated setup. These are two different questions. `scripts/ingest-large.ts` and `tests/integration/large-corpus.test.ts` address both using ~1,000 real Stack Exchange Q&A posts (200/domain across `health`, `cooking`, `scifi`, `travel`, `devops`), sampled from data dumps in the [`solr-skg-ts`](https://github.com/ajayp/solr-semantic-knowledge-graph) repo, vendored here as a git submodule at `vendor/solr-skg-ts` (not fetched by a plain clone — see below). The pipeline runs correctly on this data; the disambiguation advantage does not — see below.
+
+```bash
+# One-time: fetch the vendored data submodule (large — ~160MB across 5 domains)
+git submodule update --init
+
+npm run ingest:large
+npm run test:integration:large
+```
+
+> **What this validates:** the pipeline survives **messy real-world text at ~7x scale** (HTML entities, typos, jargon, tangents) with coherent SKG terms and no drop in domain purity — hard-gated in the test suite. **What it doesn't:** wormhole's disambiguation edge over plain BM25, clearly visible in the curated demo above, doesn't reliably reproduce here — because this corpus lacks two properties the demo has (genuinely disjoint senses, and balanced representation per sense). That's a boundary condition, not a refutation — see `tests/integration/large-corpus.test.ts` for the full breakdown, the sample-size sensitivity check, and the one case (`cold`) codified as a passing negative-result assertion rather than an ignored failure.
+>
+> `LARGE_CORPUS_SAMPLE_SIZE` (default `200`/domain) trades off statistical stability against local embedding time (~5–15 min for ~1,000 docs on CPU); test thresholds use loose purity bands rather than exact matches to stay robust to that noise.
+
 ---
 
 ## Configuration
@@ -423,6 +447,7 @@ These are operational settings, set via local `.env` values:
 | `FINAL_K` | `5` | Total number of results displayed per search operation |
 | `SPECIFICITY_THRESHOLD` | `0.6` | Below this mean-cosine-to-centroid score, a query is treated as "broad" and the sparse hop fetch is widened |
 | `MAX_HOPS` | `4` | Maximum rounds for iterative hopping (`iter:`) before stopping regardless of convergence |
+| `LARGE_CORPUS_SAMPLE_SIZE` | `200` | Docs sampled per domain for the optional large-corpus validation path (see below) |
 
 ---
 
@@ -444,7 +469,8 @@ wormhole-poc/
 │   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
 │   ├── interactions.ts     # Synthetic persona × document interaction matrix
-│   └── ingest.ts           # Seeds the demo corpus (text + behavior vectors) into Solr
+│   ├── ingest.ts           # Seeds the demo corpus (text + behavior vectors) into Solr
+│   └── ingest-large.ts     # Seeds the optional large real-text corpus into Solr
 └── tests/
     ├── search.test.ts            # Query-building unit tests (mocked fetch)
     ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)
@@ -452,7 +478,8 @@ wormhole-poc/
     ├── interactions.test.ts      # Synthetic interaction matrix unit tests
     ├── mf.test.ts                # Matrix factorization unit tests
     └── integration/
-        └── integration.test.ts   # End-to-end live Solr retrieval tests
+        ├── integration.test.ts    # End-to-end live Solr retrieval tests (demo corpus)
+        └── large-corpus.test.ts   # Statistical retrieval tests (large real-text corpus)
 ```
 
 ---

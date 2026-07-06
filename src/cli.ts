@@ -1,12 +1,18 @@
 import * as readline from "readline";
-import * as dotenv from "dotenv";
 import { wormholeSearch, wormholeSearchSparseToDense, wormholeSearchBehavioral, RankedDoc } from "./wormhole";
 import { iterativeWormholeSearch } from "./iterate";
 import { baselineSearch } from "./search";
 
-dotenv.config();
+process.loadEnvFile();
 
 const FINAL_K = parseInt(process.env.FINAL_K ?? "5");
+
+// Which Solr core to search: --core=<name> flag takes priority over SOLR_CORE
+// env var, defaulting to the demo corpus. Without this, queries silently ran
+// against wormhole_demo even after `npm run ingest:large` populated
+// wormhole_large, with no indication which corpus was actually searched.
+const coreFlag = process.argv.find((a) => a.startsWith("--core="))?.split("=")[1];
+const CORE = coreFlag ?? process.env.SOLR_CORE ?? "wormhole_demo";
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -34,8 +40,8 @@ function printSideBySide(left: RankedDoc[], right: { title?: string }[]) {
 
 async function runDenseToSparse(q: string) {
   const [wormhole, baseline] = await Promise.all([
-    wormholeSearch(q, { finalK: FINAL_K }),
-    baselineSearch(q, FINAL_K),
+    wormholeSearch(q, { finalK: FINAL_K, core: CORE }),
+    baselineSearch(q, FINAL_K, { core: CORE }),
   ]);
 
   if (wormhole.skgCategories.length) {
@@ -57,23 +63,23 @@ async function runDenseToSparse(q: string) {
 }
 
 async function runSparseToDense(q: string) {
-  const result = await wormholeSearchSparseToDense(q, { finalK: FINAL_K });
-  const baseline = await baselineSearch(q, FINAL_K);
+  const result = await wormholeSearchSparseToDense(q, { finalK: FINAL_K, core: CORE });
+  const baseline = await baselineSearch(q, FINAL_K, { core: CORE });
 
   console.log(`Pooled ${result.pooledFrom} sparse foreground doc(s) into wormhole vector\n`);
   printSideBySide(result.finalResults, baseline);
 }
 
 async function runBehavioral(q: string) {
-  const result = await wormholeSearchBehavioral(q, { finalK: FINAL_K });
-  const baseline = await baselineSearch(q, FINAL_K);
+  const result = await wormholeSearchBehavioral(q, { finalK: FINAL_K, core: CORE });
+  const baseline = await baselineSearch(q, FINAL_K, { core: CORE });
 
   console.log(`Pooled ${result.pooledFrom} dense foreground behavior vector(s) into wormhole vector\n`);
   printSideBySide(result.finalResults, baseline);
 }
 
 async function runIterative(q: string) {
-  const result = await iterativeWormholeSearch(q, { finalK: FINAL_K });
+  const result = await iterativeWormholeSearch(q, { finalK: FINAL_K, core: CORE });
 
   const hopSummary = result.hopStats.map((h) => `H${h.hop}:+${h.newDocs}`).join(", ");
   console.log(`Hops: [${hopSummary}]\n`);
@@ -89,6 +95,7 @@ async function run() {
   console.log("=".repeat(72));
   console.log("  WORMHOLE VECTORS — Apache Solr PoC");
   console.log("=".repeat(72));
+  console.log(`  Core: ${CORE}${coreFlag ? " (--core)" : process.env.SOLR_CORE ? " (SOLR_CORE)" : " (default)"}`);
   console.log("  Note: first query downloads the embedding model (~22MB)");
   console.log("\n  Legend:");
   console.log("    SKG scores: (0.000–1.000) = statistical significance of derived terms");
@@ -101,7 +108,7 @@ async function run() {
   console.log("    behave: <query> = dense → behavioral space (serendipity)\n");
 
   const ask = () => {
-    rl.question('Query (or "exit"): ', async (input) => {
+    rl.question(`[${CORE}] Query (or "exit"): `, async (input) => {
       const raw = input.trim();
       if (!raw || raw.toLowerCase() === "exit") { rl.close(); return; }
 

@@ -1,9 +1,8 @@
-import * as dotenv from "dotenv";
 import { embedText } from "./embed";
 import { poolVectors } from "./pool";
 import { wormholeHop, bm25Search, denseSearch, SolrDoc } from "./search";
 
-dotenv.config();
+process.loadEnvFile();
 
 export interface IteratedDoc extends SolrDoc {
   hopNumber: number;
@@ -25,6 +24,7 @@ export interface IterativeOpts {
   finalK?: number;
   maxHops?: number;
   minNewDocs?: number;
+  core?: string;
 }
 
 // "Repeat as needed" (29:07): bounce between dense and sparse spaces,
@@ -41,6 +41,7 @@ export async function iterativeWormholeSearch(
   const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
   const maxHops = opts?.maxHops ?? parseInt(process.env.MAX_HOPS ?? "4");
   const minNewDocs = opts?.minNewDocs ?? 2;
+  const core = opts?.core;
 
   const seen = new Set<string>();
   const accumulated: IteratedDoc[] = [];
@@ -60,7 +61,7 @@ export async function iterativeWormholeSearch(
   };
 
   const vector = await embedText(query);
-  const { docs: hop1Docs, skgTerms } = await wormholeHop(vector, fgK);
+  const { docs: hop1Docs, skgTerms } = await wormholeHop(vector, fgK, { core });
   recordHop(1, hop1Docs);
 
   let lastVectorSourceDocs: SolrDoc[] = [];
@@ -70,12 +71,12 @@ export async function iterativeWormholeSearch(
 
     if (hop % 2 === 0) {
       if (!skgTerms.length) break;
-      docs = await bm25Search(skgTerms, fgK, { withVectors: true });
+      docs = await bm25Search(skgTerms, fgK, { withVectors: true, core });
       lastVectorSourceDocs = docs;
     } else {
       const vectors = lastVectorSourceDocs.filter((d) => d.vector).map((d) => d.vector!);
       if (!vectors.length) break;
-      docs = await denseSearch(poolVectors(vectors), fgK);
+      docs = await denseSearch(poolVectors(vectors), fgK, { core });
     }
 
     const newDocs = recordHop(hop, docs);

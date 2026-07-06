@@ -1,9 +1,8 @@
-import * as dotenv from "dotenv";
 import { solrPost } from "./solr-client";
 
-dotenv.config();
+process.loadEnvFile();
 
-const CORE = "wormhole_demo";
+const DEFAULT_CORE = "wormhole_demo";
 
 export interface SolrDoc {
   id: string;
@@ -28,6 +27,8 @@ export interface WormholeHopResult {
 export interface SearchOpts {
   withVectors?: boolean;
   withBehaviorVectors?: boolean;
+  /** Which Solr core to query — defaults to wormhole_demo. */
+  core?: string;
 }
 
 // The two hoppable KNN spaces: text embeddings and behavioral (MF) embeddings.
@@ -76,7 +77,8 @@ export async function denseSearch(
   k: number,
   opts?: SearchOpts & { field?: VectorField }
 ): Promise<SolrDoc[]> {
-  const response = (await solrPost(`/${CORE}/select`, {
+  const core = opts?.core ?? DEFAULT_CORE;
+  const response = (await solrPost(`/${core}/select`, {
     query: buildKnnQuery(vector, k, opts?.field ?? "vector"),
     limit: k,
     fields: fieldsFor(opts),
@@ -85,14 +87,22 @@ export async function denseSearch(
   return normalizeDocs(response.response.docs);
 }
 
+/**
+ * The dense hop. Runs a KNN query to get the nearest docs (the "foreground
+ * set"), and in the same round-trip facets over `text_terms` with Solr's SKG
+ * `relatedness()` function to find the keywords most distinctive of that set
+ * vs. the whole corpus — plus a second sub-facet on `source` for the
+ * category-level signal. Those terms feed {@link bm25Search}.
+ */
 export async function wormholeHop(
   vector: number[],
   k: number,
   opts?: SearchOpts
 ): Promise<WormholeHopResult> {
+  const core = opts?.core ?? DEFAULT_CORE;
   const skgLimit = parseInt(process.env.SKG_LIMIT ?? "8");
 
-  const response = (await solrPost(`/${CORE}/select`, {
+  const response = (await solrPost(`/${core}/select`, {
     query: buildKnnQuery(vector, k),
     limit: k,
     fields: fieldsFor(opts),
@@ -137,12 +147,22 @@ export async function wormholeHop(
   return { docs, skgTerms, skgCategories };
 }
 
+/**
+ * The sparse hop. A BM25 search over `text_terms` using the SKG terms from
+ * {@link wormholeHop}, each boosted by its relatedness score — turns the
+ * dense hop's fuzzy neighborhood into a precise keyword match. Also accepts
+ * an optional `categories` boost clause (source:"cat"^relatedness) for
+ * callers that want to combine category and term signals. Returns `[]`
+ * without hitting Solr if there are no terms/categories to search on.
+ */
 export async function bm25Search(
   terms: SkgTerm[],
   k: number,
   opts?: SearchOpts & { categories?: SkgTerm[] }
 ): Promise<SolrDoc[]> {
   if (!terms.length) return [];
+
+  const core = opts?.core ?? DEFAULT_CORE;
 
   // relatedness() can be negative (term/category is under-represented in the
   // foreground vs. background) — Solr's `^boost` syntax requires a positive
@@ -156,7 +176,7 @@ export async function bm25Search(
   if (!termClauses.length && !categoryClauses.length) return [];
   const queryString = [...termClauses, ...categoryClauses].join(" OR ");
 
-  const response = (await solrPost(`/${CORE}/select`, {
+  const response = (await solrPost(`/${core}/select`, {
     query: queryString,
     limit: k,
     fields: fieldsFor(opts),
@@ -165,14 +185,22 @@ export async function bm25Search(
   return normalizeDocs(response.response.docs);
 }
 
+/**
+ * Plain BM25 on the raw query string — the baseline comparison used by the
+ * CLI. Words are escaped and bound to `text` via Solr's grouped field
+ * syntax (`text:(a b c)`) so multi-word queries don't leak unbound tokens to
+ * Solr's default field. Falls back to matching everything (`*:*`) if the
+ * query is empty or whitespace.
+ */
 export async function baselineSearch(
   query: string,
   k: number,
   opts?: SearchOpts
 ): Promise<SolrDoc[]> {
+  const core = opts?.core ?? DEFAULT_CORE;
   const words = query.trim().split(/\s+/).filter(Boolean).map(escapeSolrTerm);
 
-  const response = (await solrPost(`/${CORE}/select`, {
+  const response = (await solrPost(`/${core}/select`, {
     query: words.length ? `text:(${words.join(" ")})` : "*:*",
     limit: k,
     fields: fieldsFor(opts),
