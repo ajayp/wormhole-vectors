@@ -17,7 +17,7 @@ export interface WormholeOpts {
   finalK?: number;
 }
 
-export type Hop = "sparse" | "dense";
+export type Hop = "sparse" | "dense" | "behavioral";
 
 export interface RankedDoc extends SolrDoc {
   hop: Hop;
@@ -33,6 +33,12 @@ export interface SearchResult {
 }
 
 export interface SparseToDenseResult {
+  query: string;
+  pooledFrom: number;
+  finalResults: RankedDoc[];
+}
+
+export interface BehavioralResult {
   query: string;
   pooledFrom: number;
   finalResults: RankedDoc[];
@@ -73,6 +79,22 @@ export function mergeWormholeResults(
   return mergeByPriority(
     [
       { docs: sparse, hop: "sparse" },
+      { docs: dense, hop: "dense" },
+    ],
+    finalK
+  );
+}
+
+// Behavioral results (shared-audience serendipity) take priority, backfilled
+// by the dense foreground that produced the pooled behavior vector.
+export function mergeWormholeResultsBehavioralFirst(
+  behavioral: SolrDoc[],
+  dense: SolrDoc[],
+  finalK: number
+): RankedDoc[] {
+  return mergeByPriority(
+    [
+      { docs: behavioral, hop: "behavioral" },
       { docs: dense, hop: "dense" },
     ],
     finalK
@@ -178,4 +200,56 @@ export async function wormholeSearchSparseToDense(
   const merged = mergeWormholeResultsDenseFirst(denseResults, foregroundDocs, finalK);
 
   return { query, pooledFrom: foregroundVectors.length, finalResults: merged };
+}
+
+// Pool the docs' behavior_vector embeddings into a single wormhole vector and
+// KNN it in the behavioral space — items whose *audience* overlaps the
+// foreground's, whether or not they share meaning or keywords.
+export async function behavioralHop(docs: SolrDoc[], k: number): Promise<SolrDoc[]> {
+  const behaviorVectors = docs.filter((d) => d.behavior_vector).map((d) => d.behavior_vector!);
+  if (!behaviorVectors.length) return [];
+
+  const pooled = poolVectors(behaviorVectors);
+  return denseSearch(pooled, k, { field: "behavior_vector" });
+}
+
+// The talk's third hoppable space (40:39–45:36): text meaning → behavioral
+// affinity. Dense first hop finds what the query *means*; the behavioral hop
+// finds what that audience *also touches* — the serendipity claim (77:46):
+// results that share audience but not meaning or keywords, tagged [B].
+export async function wormholeSearchBehavioral(
+  query: string,
+  opts?: WormholeOpts
+): Promise<BehavioralResult> {
+  const fgK = opts?.foregroundK ?? parseInt(process.env.FOREGROUND_K ?? "15");
+  const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
+
+  // Step 1: dense first hop in text-embedding space, carrying behavior vectors
+  const vector = await embedText(query);
+  const foregroundDocs = await denseSearch(vector, fgK, { withBehaviorVectors: true });
+  const pooledFrom = foregroundDocs.filter((d) => d.behavior_vector).length;
+
+  if (!pooledFrom) {
+    console.warn("Dense foreground has no behavior vectors — cannot hop to behavioral space.");
+    return {
+      query,
+      pooledFrom: 0,
+      finalResults: foregroundDocs.slice(0, finalK).map((d) => ({ ...d, hop: "dense" as const })),
+    };
+  }
+
+  // Step 2+3: pool behavior vectors → KNN in behavioral space. The nearest
+  // behavioral neighbors are the foreground docs themselves (same audience,
+  // same meaning), so fetch past them and keep only docs the dense hop did
+  // NOT find — the serendipitous remainder is the behavioral contribution.
+  const foregroundIds = new Set(foregroundDocs.map((d) => d.id));
+  const behavioralCandidates = await behavioralHop(foregroundDocs, fgK + finalK);
+  const behavioralResults = behavioralCandidates
+    .filter((d) => !foregroundIds.has(d.id))
+    .slice(0, finalK);
+
+  // Step 4: behavioral-first merge + dedupe, backfilled from dense
+  const merged = mergeWormholeResultsBehavioralFirst(behavioralResults, foregroundDocs, finalK);
+
+  return { query, pooledFrom, finalResults: merged };
 }

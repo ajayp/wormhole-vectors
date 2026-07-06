@@ -210,7 +210,7 @@ Together, Case 3 and Case 5 make the strongest version of the pitch: the *same* 
 
 ## Other Traversal Directions
 
-The dense → SKG → sparse pipeline above is one direction through the wormhole. This repo also implements the reverse hop, a broad/specific signal that adjusts how the pipeline merges results, and iterative multi-hop traversal.
+The dense → SKG → sparse pipeline above is one direction through the wormhole. This repo also implements the reverse hop, a broad/specific signal that adjusts how the pipeline merges results, iterative multi-hop traversal, and a third hoppable space built from (synthetic) user behavior.
 
 ### Sparse → Dense (`s2d:`)
 
@@ -264,6 +264,29 @@ Hops: [H1:+15, H2:+4, H3:+3, H4:+0]
 ```
 
 Here hop 4 contributed 0 new documents, so the loop stops early rather than running to `MAX_HOPS` — a natural convergence signal that iterating further wouldn't turn up anything new.
+
+### Behavioral Space (`behave:`)
+
+The talk's third vector space (40:39–45:36): alongside *what documents mean* (text embeddings) and *what words they contain* (BM25), index *who engages with them* — collaborative-filtering item embeddings learned from user interactions. Two documents are close in this space when the same people touch both, regardless of whether they share any meaning or vocabulary.
+
+Since this PoC has no real users, the interactions are synthetic but deterministic: [scripts/interactions.ts](scripts/interactions.ts) defines 24 personas with affinities across the corpus's `source` categories (a `barista` touches both `java_coffee` and `server_hospitality` docs; a `polyglot_developer` touches both `python_programming` and `java_programming`), and generates a seeded users × items implicit-feedback matrix (values 0/1/3). [src/mf.ts](src/mf.ts) factorizes that matrix with plain gradient descent (no dependencies, 16 dims, 200 epochs, fixed seed) and the L2-normalized item vectors are indexed into a second `DenseVectorField` (`behavior_vector`) at ingest time.
+
+The `behave:` pipeline then hops **across spaces**: dense text KNN finds what the query *means*, the foreground's behavior vectors are pooled into a wormhole vector (same pooling as `s2d:`), and a KNN in the behavioral space finds what that audience *also engages with* — keeping only documents the dense hop did **not** find, so the `[B]`-tagged results are pure behavioral contribution:
+
+```
+behave: java coffee
+Pooled 15 dense foreground behavior vector(s) into wormhole vector
+
+Wormhole Results                           │ Plain BM25 Search
+------------------------------------------─┼─------------------------------------------
+Mandheling Coffee from Sumatra [B]         │ Indonesian Coffee Trade History
+Arabica Cultivation in Java [B]            │ Java Coffee Origins
+Food Safety Training for Servers [B]       │ Brewing Methods for Indonesian Coffee
+Server Burnout in the Restaurant Industr   │ Arabica Cultivation in Java
+Catering and Banquet Server Roles [B]      │ Terroir of Indonesian Coffee Islands
+```
+
+This is the talk's serendipity claim (77:46) in action: `Food Safety Training for Servers` shares no meaning and no keywords with `java coffee` — no text-based system would ever return it. It surfaces because the barista and café-owner personas engage with both coffee content and restaurant-service content, and matrix factorization encoded that shared audience as proximity in the behavioral space. Note what *doesn't* surface: no `java_programming`, no `mercury_*` — the hop stays within the persona-linked audience rather than drifting to lexically similar domains.
 
 ---
 
@@ -366,6 +389,7 @@ Prefix a query to switch traversal direction (see [Other Traversal Directions](#
 - plain query — dense → SKG → sparse (default)
 - `s2d: <query>` — sparse → SKG → dense (reverse hop)
 - `iter: <query>` — iterative hopping across rounds
+- `behave: <query>` — dense → behavioral space (serendipity)
 
 ### Tests
 
@@ -381,9 +405,9 @@ npm run test:integration
 npm run test:all
 ```
 
-**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), and vector pooling/specificity math (`pool.ts`) using mocked Solr responses and pure-function inputs. They verify that the right fields, boosts, and escaping are applied — no live instance needed.
+**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), vector pooling/specificity math (`pool.ts`), the synthetic interaction matrix (`scripts/interactions.ts`), and matrix factorization (`mf.ts` — reconstruction error decreases, item vectors are unit-norm, persona-linked categories end up behaviorally closer than unlinked ones) using mocked Solr responses and pure-function inputs. No live instance needed.
 
-**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), SKG category alignment, and iterative-hop convergence. They auto-skip with a clear message if Solr is unavailable.
+**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), SKG category alignment, iterative-hop convergence, and behavioral serendipity (a coffee query surfaces persona-linked hospitality docs without leaking into unlinked domains). They auto-skip with a clear message if Solr is unavailable.
 
 ---
 
@@ -414,15 +438,19 @@ wormhole-poc/
 │   ├── solr.ts             # Schema setup for the Solr core
 │   ├── search.ts           # Dense, BM25, and SKG query builders
 │   ├── pool.ts             # Vector pooling (mean + L2 norm) and foreground specificity
-│   ├── wormhole.ts         # Orchestrates the dense↔sparse pipelines (both directions)
+│   ├── mf.ts               # Matrix factorization → behavioral item vectors
+│   ├── wormhole.ts         # Orchestrates the dense↔sparse↔behavioral pipelines
 │   ├── iterate.ts          # Iterative multi-hop traversal
 │   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
-│   └── ingest.ts           # Seeds the demo corpus into Solr
+│   ├── interactions.ts     # Synthetic persona × document interaction matrix
+│   └── ingest.ts           # Seeds the demo corpus (text + behavior vectors) into Solr
 └── tests/
     ├── search.test.ts            # Query-building unit tests (mocked fetch)
     ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)
     ├── pool.test.ts              # Vector pooling/specificity unit tests (pure functions)
+    ├── interactions.test.ts      # Synthetic interaction matrix unit tests
+    ├── mf.test.ts                # Matrix factorization unit tests
     └── integration/
         └── integration.test.ts   # End-to-end live Solr retrieval tests
 ```
@@ -433,4 +461,4 @@ wormhole-poc/
 
 [Beyond Hybrid Search: Traversing Vector Spaces with Wormhole Vectors](https://www.youtube.com/watch?v=fvDC7nK-_C0) — the talk this repo implements.
 
-> This PoC implements the dense → sparse direction of wormhole traversal, the reverse sparse → dense direction (`s2d:`, via vector pooling), and iterative multi-hop traversal loops (`iter:`). The full technique as described in the talk also supports additional search spaces such as behavioral/clickstream embeddings, which this repo does not yet implement.
+> This PoC implements the dense → sparse direction of wormhole traversal, the reverse sparse → dense direction (`s2d:`, via vector pooling), iterative multi-hop traversal loops (`iter:`), and a behavioral third space (`behave:`, collaborative-filtering embeddings factorized from synthetic persona interactions). The behavioral space uses synthetic interaction data — a production system would learn it from real clickstream/purchase signals — but the traversal mechanics are the same.

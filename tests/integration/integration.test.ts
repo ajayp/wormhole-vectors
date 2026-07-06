@@ -16,7 +16,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-import { wormholeSearch, wormholeSearchSparseToDense } from "../../src/wormhole";
+import { wormholeSearch, wormholeSearchSparseToDense, wormholeSearchBehavioral } from "../../src/wormhole";
 import { baselineSearch, wormholeHop } from "../../src/search";
 import { embedText } from "../../src/embed";
 import { iterativeWormholeSearch } from "../../src/iterate";
@@ -416,6 +416,44 @@ integrationTest("SKG category matches the dominant source of the foreground ('Ja
 // ──────────────────────────────────────────────────────────────────────
 // PHASE C: Iterative hopping
 // ──────────────────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────────────────
+// PHASE D: Behavioral vector space (serendipity)
+// ──────────────────────────────────────────────────────────────────────
+
+integrationTest("behavioral hop surfaces a cross-meaning doc for 'java coffee' (persona-linked serendipity)", async () => {
+  const result = await wormholeSearchBehavioral("java coffee", { finalK: FINAL_K });
+
+  assert.ok(result.pooledFrom > 0, "expected behavior vectors on the dense foreground");
+  assert.ok(result.finalResults.length > 0);
+
+  const behavioralDocs = result.finalResults.filter((d) => d.hop === "behavioral");
+  assert.ok(behavioralDocs.length > 0, "expected at least one behavioral-hop result");
+
+  // The barista/cafe_owner personas link java_coffee to server_hospitality —
+  // shared audience, not shared meaning. Kept loose: at least one behavioral
+  // result outside the query's literal java_coffee domain.
+  const crossMeaning = behavioralDocs.filter((d) => d.source !== "java_coffee");
+  assert.ok(
+    crossMeaning.length > 0,
+    `expected ≥1 cross-meaning behavioral doc, got sources: ${behavioralDocs.map((d) => d.source)}`
+  );
+});
+
+integrationTest("behavioral results stay within the persona-linked audience for 'java coffee'", async () => {
+  const result = await wormholeSearchBehavioral("java coffee", { finalK: FINAL_K });
+
+  // Personas with java_coffee affinity only also touch server_hospitality;
+  // no coffee persona touches e.g. mercury_car or python_snake.
+  const linkedSources = new Set(["java_coffee", "server_hospitality"]);
+  const behavioralDocs = result.finalResults.filter((d) => d.hop === "behavioral");
+  for (const doc of behavioralDocs) {
+    assert.ok(
+      linkedSources.has(doc.source ?? ""),
+      `behavioral result "${doc.title}" (${doc.source}) is outside the persona-linked audience`
+    );
+  }
+});
 
 integrationTest("iterative search converges within MAX_HOPS and returns ≥ as many unique docs as single-shot", async () => {
   const [iterative, singleShot] = await Promise.all([

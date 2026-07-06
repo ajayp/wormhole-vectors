@@ -163,6 +163,32 @@ test("denseSearch runs a plain KNN query with no facet", async () => {
   assert.equal(docs.length, 1);
 });
 
+test("denseSearch targets the behavior_vector field when requested", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await denseSearch([0.1, 0.2], 5, { field: "behavior_vector" });
+
+  assert.equal(calls[0].body.query, "{!knn f=behavior_vector topK=5}[0.1,0.2]");
+});
+
+test("denseSearch requests the behavior_vector field when withBehaviorVectors is set", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await denseSearch([0.1, 0.2], 5, { withBehaviorVectors: true });
+
+  assert.ok((calls[0].body.fields as string[]).includes("behavior_vector"));
+});
+
+test("denseSearch parses stringified behavior_vector components back to numbers", async () => {
+  stubFetch({
+    response: { docs: [{ id: "1", title: "t", behavior_vector: ["0.5", "-0.25"] }] },
+  });
+
+  const docs = await denseSearch([0.1, 0.2], 5, { withBehaviorVectors: true });
+
+  assert.deepEqual(docs[0].behavior_vector, [0.5, -0.25]);
+});
+
 test("bm25Search ORs in category clauses when provided", async () => {
   const calls = stubFetch({ response: { docs: [] } });
 

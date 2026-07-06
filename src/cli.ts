@@ -1,6 +1,6 @@
 import * as readline from "readline";
 import * as dotenv from "dotenv";
-import { wormholeSearch, wormholeSearchSparseToDense, RankedDoc } from "./wormhole";
+import { wormholeSearch, wormholeSearchSparseToDense, wormholeSearchBehavioral, RankedDoc } from "./wormhole";
 import { iterativeWormholeSearch } from "./iterate";
 import { baselineSearch } from "./search";
 
@@ -10,9 +10,11 @@ const FINAL_K = parseInt(process.env.FINAL_K ?? "5");
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+const HOP_TAGS: Record<RankedDoc["hop"], string> = { sparse: "S", dense: "D", behavioral: "B" };
+
 function hopTag(doc: RankedDoc | undefined): string {
   if (!doc) return "";
-  return ` [${doc.hop === "sparse" ? "S" : "D"}]`;
+  return ` [${HOP_TAGS[doc.hop]}]`;
 }
 
 function printSideBySide(left: RankedDoc[], right: { title?: string }[]) {
@@ -62,6 +64,14 @@ async function runSparseToDense(q: string) {
   printSideBySide(result.finalResults, baseline);
 }
 
+async function runBehavioral(q: string) {
+  const result = await wormholeSearchBehavioral(q, { finalK: FINAL_K });
+  const baseline = await baselineSearch(q, FINAL_K);
+
+  console.log(`Pooled ${result.pooledFrom} dense foreground behavior vector(s) into wormhole vector\n`);
+  printSideBySide(result.finalResults, baseline);
+}
+
 async function runIterative(q: string) {
   const result = await iterativeWormholeSearch(q, { finalK: FINAL_K });
 
@@ -84,9 +94,11 @@ async function run() {
   console.log("    SKG scores: (0.000–1.000) = statistical significance of derived terms");
   console.log("    [S] = sparse hop (BM25, context-driven)");
   console.log("    [D] = dense hop (KNN, semantic similarity backfill)");
-  console.log("    plain query    = dense → SKG → sparse (default)");
-  console.log("    s2d: <query>   = sparse → SKG → dense (reverse hop)");
-  console.log("    iter: <query>  = iterative hopping across rounds\n");
+  console.log("    [B] = behavioral hop (shared audience, not shared meaning)");
+  console.log("    plain query     = dense → SKG → sparse (default)");
+  console.log("    s2d: <query>    = sparse → SKG → dense (reverse hop)");
+  console.log("    iter: <query>   = iterative hopping across rounds");
+  console.log("    behave: <query> = dense → behavioral space (serendipity)\n");
 
   const ask = () => {
     rl.question('Query (or "exit"): ', async (input) => {
@@ -98,6 +110,8 @@ async function run() {
           await runSparseToDense(raw.slice(4).trim());
         } else if (raw.toLowerCase().startsWith("iter:")) {
           await runIterative(raw.slice(5).trim());
+        } else if (raw.toLowerCase().startsWith("behave:")) {
+          await runBehavioral(raw.slice(7).trim());
         } else {
           await runDenseToSparse(raw);
         }

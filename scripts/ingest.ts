@@ -2,6 +2,8 @@ import * as dotenv from "dotenv";
 import { randomUUID } from "crypto";
 import { ensureCore, insertDocuments, Doc } from "../src/solr";
 import { embedBatch } from "../src/embed";
+import { factorize } from "../src/mf";
+import { generateInteractions } from "./interactions";
 
 dotenv.config();
 
@@ -176,6 +178,11 @@ async function main() {
     source: d.source,
     vector: vectors[i],
   }));
+
+  console.log("\nFactorizing synthetic persona interactions into behavioral vectors...");
+  const interactions = generateInteractions(docs);
+  const { itemVectors } = factorize(interactions);
+  docs.forEach((doc, i) => (doc.behaviorVector = itemVectors[i]));
 
   console.log("\nInserting documents into Solr...");
   await insertDocuments(docs);

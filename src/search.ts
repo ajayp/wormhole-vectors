@@ -11,6 +11,7 @@ export interface SolrDoc {
   text?: string;
   source?: string;
   vector?: number[];
+  behavior_vector?: number[];
 }
 
 export interface SkgTerm {
@@ -26,7 +27,11 @@ export interface WormholeHopResult {
 
 export interface SearchOpts {
   withVectors?: boolean;
+  withBehaviorVectors?: boolean;
 }
+
+// The two hoppable KNN spaces: text embeddings and behavioral (MF) embeddings.
+export type VectorField = "vector" | "behavior_vector";
 
 // Escapes Lucene/Solr query-syntax special characters so raw terms can be
 // safely interpolated into a hand-built query string.
@@ -37,37 +42,42 @@ export function escapeSolrTerm(s: string): string {
 function fieldsFor(opts?: SearchOpts): string[] {
   const fields = ["id", "title", "text", "source"];
   if (opts?.withVectors) fields.push("vector");
+  if (opts?.withBehaviorVectors) fields.push("behavior_vector");
   return fields;
 }
 
-// Solr returns the vector field as strings (see the encodeVector workaround
+// Solr returns vector fields as strings (see the encodeVector workaround
 // in src/solr.ts) — parse them back to numbers in one place.
 function normalizeDocs(docs: Array<Record<string, unknown>>): SolrDoc[] {
   return docs.map((d) => {
     const doc = { ...d } as unknown as SolrDoc;
-    if (Array.isArray(d.vector)) {
-      doc.vector = (d.vector as Array<string | number>).map((v) =>
-        typeof v === "string" ? parseFloat(v) : v
-      );
+    for (const field of ["vector", "behavior_vector"] as const) {
+      if (Array.isArray(d[field])) {
+        doc[field] = (d[field] as Array<string | number>).map((v) =>
+          typeof v === "string" ? parseFloat(v) : v
+        );
+      }
     }
     return doc;
   });
 }
 
-function buildKnnQuery(vector: number[], k: number): string {
-  return `{!knn f=vector topK=${k}}[${vector.join(",")}]`;
+function buildKnnQuery(vector: number[], k: number, field: VectorField = "vector"): string {
+  return `{!knn f=${field} topK=${k}}[${vector.join(",")}]`;
 }
 
 // Plain KNN dense search — no SKG facet. The pooled-vector counterpart to
 // wormholeHop's dense+facet request, used for the sparse→dense hop and
 // iterative traversal, where no new SKG terms are needed from this leg.
+// `field` selects the vector space: text embeddings (default) or the
+// behavioral (matrix-factorization) space.
 export async function denseSearch(
   vector: number[],
   k: number,
-  opts?: SearchOpts
+  opts?: SearchOpts & { field?: VectorField }
 ): Promise<SolrDoc[]> {
   const response = (await solrPost(`/${CORE}/select`, {
-    query: buildKnnQuery(vector, k),
+    query: buildKnnQuery(vector, k, opts?.field ?? "vector"),
     limit: k,
     fields: fieldsFor(opts),
   })) as { response: { docs: Array<Record<string, unknown>> } };

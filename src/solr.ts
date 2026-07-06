@@ -20,6 +20,7 @@ export interface Doc {
   text: string;
   source: string;
   vector: number[];
+  behaviorVector?: number[];
 }
 
 // Solr's JSON parser throws "ClassCastException: String cannot be cast to Number" on
@@ -57,6 +58,17 @@ export async function ensureCore(): Promise<void> {
       name: "knn_vector_384",
       class: "solr.DenseVectorField",
       vectorDimension: 384,
+      similarityFunction: "cosine",
+    },
+  });
+
+  // Behavioral (collaborative-filtering) vectors from matrix factorization —
+  // a third hoppable space alongside text embeddings, see src/mf.ts
+  await addToSchemaIdempotent({
+    "add-field-type": {
+      name: "knn_vector_16",
+      class: "solr.DenseVectorField",
+      vectorDimension: 16,
       similarityFunction: "cosine",
     },
   });
@@ -120,6 +132,16 @@ export async function ensureCore(): Promise<void> {
     },
   });
 
+  // Behavioral vector field
+  await addToSchemaIdempotent({
+    "add-field": {
+      name: "behavior_vector",
+      type: "knn_vector_16",
+      stored: true,
+      indexed: true,
+    },
+  });
+
   console.log(`Core [${CORE}] ready.`);
 }
 
@@ -131,6 +153,7 @@ export async function insertDocuments(docs: Doc[]): Promise<void> {
     text_terms: `${d.title} ${d.text}`, // duplicate for facet targeting
     source: d.source,
     vector: encodeVector(d.vector),
+    ...(d.behaviorVector ? { behavior_vector: encodeVector(d.behaviorVector) } : {}),
   }));
 
   await solrPost(`/${CORE}/update`, payload);

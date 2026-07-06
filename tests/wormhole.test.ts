@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergeWormholeResults, mergeWormholeResultsDenseFirst } from "../src/wormhole";
+import {
+  mergeWormholeResults,
+  mergeWormholeResultsDenseFirst,
+  mergeWormholeResultsBehavioralFirst,
+} from "../src/wormhole";
 import { SolrDoc } from "../src/search";
 
 const doc = (id: string): SolrDoc => ({ id, title: `title-${id}` });
@@ -116,4 +120,37 @@ test("falls back to sparse-only when dense is empty", () => {
 
   assert.deepEqual(merged.map((d) => d.id), ["s1", "s2"]);
   assert.equal(merged[0].hop, "sparse");
+});
+
+// ── mergeWormholeResultsBehavioralFirst (behavioral space, Phase D) ──────
+
+test("behavioral results come first and are tagged hop: behavioral", () => {
+  const behavioral = [doc("b1"), doc("b2")];
+  const dense = [doc("d1"), doc("d2")];
+
+  const merged = mergeWormholeResultsBehavioralFirst(behavioral, dense, 5);
+
+  assert.deepEqual(merged.map((d) => d.id), ["b1", "b2", "d1", "d2"]);
+  assert.equal(merged[0].hop, "behavioral");
+  assert.equal(merged[1].hop, "behavioral");
+  assert.equal(merged[2].hop, "dense");
+});
+
+test("dedupes by id, preferring the behavioral occurrence", () => {
+  const behavioral = [doc("shared"), doc("b2")];
+  const dense = [doc("shared"), doc("d1")];
+
+  const merged = mergeWormholeResultsBehavioralFirst(behavioral, dense, 5);
+
+  assert.deepEqual(merged.map((d) => d.id), ["shared", "b2", "d1"]);
+  assert.equal(merged[0].hop, "behavioral");
+});
+
+test("falls back to dense-only when behavioral is empty", () => {
+  const dense = [doc("d1"), doc("d2")];
+
+  const merged = mergeWormholeResultsBehavioralFirst([], dense, 5);
+
+  assert.deepEqual(merged.map((d) => d.id), ["d1", "d2"]);
+  assert.equal(merged[0].hop, "dense");
 });
