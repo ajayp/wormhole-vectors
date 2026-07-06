@@ -193,7 +193,7 @@ for (const { ambiguousTerm, steered, domain } of CROSS_DOMAIN_QUERIES) {
   integrationTest(`[info] '${steered}' vs. BM25 and vs. bare '${ambiguousTerm}' toward ${domain}`, async () => {
     const [wormholeSteered, baselineSteered, wormholeBare] = await Promise.all([
       wormholeSearch(steered, { finalK: FINAL_K, core: CORE }),
-      baselineSearch(steered, FINAL_K, CORE),
+      baselineSearch(steered, FINAL_K, { core: CORE }),
       wormholeSearch(ambiguousTerm, { finalK: FINAL_K, core: CORE }),
     ]);
 
@@ -238,7 +238,7 @@ for (const term of BARE_AMBIGUOUS_TERMS_INFO) {
   integrationTest(`[info] bare '${term}' → wormhole vs. BM25 domain coherence`, async () => {
     const [wormholeResult, baselineResult] = await Promise.all([
       wormholeSearch(term, { finalK: FINAL_K, core: CORE }),
-      baselineSearch(term, FINAL_K, CORE),
+      baselineSearch(term, FINAL_K, { core: CORE }),
     ]);
 
     const wormholeCoherence = dominantDomainShare(wormholeResult.finalResults.map((d) => d.source));
@@ -258,7 +258,7 @@ integrationTest(
   async () => {
     const [wormholeResult, baselineResult] = await Promise.all([
       wormholeSearch("cold", { finalK: FINAL_K, core: CORE }),
-      baselineSearch("cold", FINAL_K, CORE),
+      baselineSearch("cold", FINAL_K, { core: CORE }),
     ]);
 
     const wormholeCoherence = dominantDomainShare(wormholeResult.finalResults.map((d) => d.source));
@@ -295,7 +295,7 @@ integrationTest(
     for (const { query, domain } of DOMAIN_ANCHORED_QUERIES) {
       const [wormhole, baseline] = await Promise.all([
         wormholeSearch(query, { finalK: FINAL_K, core: CORE }),
-        baselineSearch(query, FINAL_K, CORE),
+        baselineSearch(query, FINAL_K, { core: CORE }),
       ]);
 
       wormholeTotal += purityAt5(wormhole.finalResults.map((d) => d.source), domain);
@@ -331,7 +331,7 @@ integrationTest(
     for (const { query, domain } of DOMAIN_ANCHORED_QUERIES) {
       const [wormhole, baseline] = await Promise.all([
         wormholeSearch(query, { finalK: FINAL_K, core: CORE }),
-        baselineSearch(query, FINAL_K, CORE),
+        baselineSearch(query, FINAL_K, { core: CORE }),
       ]);
 
       if (wormhole.finalResults[0]?.source === domain) wormholeTop1Matches++;
