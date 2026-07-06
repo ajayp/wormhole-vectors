@@ -1,6 +1,14 @@
 import * as dotenv from "dotenv";
 import { embedText } from "./embed";
-import { wormholeHop, bm25Search, SolrDoc, SkgTerm } from "./search";
+import { poolVectors } from "./pool";
+import {
+  wormholeHop,
+  bm25Search,
+  baselineSearch,
+  denseSearch,
+  SolrDoc,
+  SkgTerm,
+} from "./search";
 
 dotenv.config();
 
@@ -9,14 +17,45 @@ export interface WormholeOpts {
   finalK?: number;
 }
 
+export type Hop = "sparse" | "dense";
+
 export interface RankedDoc extends SolrDoc {
-  hop: "sparse" | "dense";
+  hop: Hop;
 }
 
 export interface SearchResult {
   query: string;
   skgTerms: SkgTerm[];
   finalResults: RankedDoc[];
+}
+
+export interface SparseToDenseResult {
+  query: string;
+  pooledFrom: number;
+  finalResults: RankedDoc[];
+}
+
+// Dedupes docs across hops in priority order — earlier groups win ties and
+// their own internal ranking is preserved. `mergeWormholeResults` (sparse
+// first) and its sparse→dense mirror image both build on this.
+function mergeByPriority(
+  groups: Array<{ docs: SolrDoc[]; hop: Hop }>,
+  finalK: number
+): RankedDoc[] {
+  const seen = new Set<string>();
+  const merged: RankedDoc[] = [];
+
+  for (const { docs, hop } of groups) {
+    for (const doc of docs) {
+      if (merged.length >= finalK) break;
+      if (!seen.has(doc.id)) {
+        seen.add(doc.id);
+        merged.push({ ...doc, hop });
+      }
+    }
+  }
+
+  return merged;
 }
 
 // Sparse (SKG-refined) results take priority; dense (raw KNN) results only
@@ -28,20 +67,29 @@ export function mergeWormholeResults(
   dense: SolrDoc[],
   finalK: number
 ): RankedDoc[] {
-  const seen = new Set<string>();
-  const merged: RankedDoc[] = [];
+  return mergeByPriority(
+    [
+      { docs: sparse, hop: "sparse" },
+      { docs: dense, hop: "dense" },
+    ],
+    finalK
+  );
+}
 
-  for (const [docs, hop] of [[sparse, "sparse"], [dense, "dense"]] as const) {
-    for (const doc of docs) {
-      if (merged.length >= finalK) break;
-      if (!seen.has(doc.id)) {
-        seen.add(doc.id);
-        merged.push({ ...doc, hop });
-      }
-    }
-  }
-
-  return merged;
+// Mirror image for the sparse→dense hop: dense (pooled-vector KNN) results
+// take priority, backfilled by the sparse foreground that produced them.
+export function mergeWormholeResultsDenseFirst(
+  dense: SolrDoc[],
+  sparse: SolrDoc[],
+  finalK: number
+): RankedDoc[] {
+  return mergeByPriority(
+    [
+      { docs: dense, hop: "dense" },
+      { docs: sparse, hop: "sparse" },
+    ],
+    finalK
+  );
 }
 
 export async function wormholeSearch(
@@ -59,7 +107,11 @@ export async function wormholeSearch(
 
   if (!skgTerms.length) {
     console.warn("SKG returned no terms — returning dense results only.");
-    return { query, skgTerms: [], finalResults: foregroundDocs.slice(0, finalK) };
+    return {
+      query,
+      skgTerms: [],
+      finalResults: foregroundDocs.slice(0, finalK).map((d) => ({ ...d, hop: "dense" as const })),
+    };
   }
 
   // Step 4: sparse traversal using derived terms
@@ -69,4 +121,38 @@ export async function wormholeSearch(
   const merged = mergeWormholeResults(sparseResults, foregroundDocs, finalK);
 
   return { query, skgTerms, finalResults: merged };
+}
+
+// The talk's "easy direction" (52:17): keyword search → average top-N doc
+// embeddings → KNN. Mirrors wormholeSearch but starts sparse and hops dense.
+export async function wormholeSearchSparseToDense(
+  query: string,
+  opts?: WormholeOpts
+): Promise<SparseToDenseResult> {
+  const fgK = opts?.foregroundK ?? parseInt(process.env.FOREGROUND_K ?? "15");
+  const finalK = opts?.finalK ?? parseInt(process.env.FINAL_K ?? "5");
+
+  // Step 1: BM25 on the raw query, with vectors so we can pool them
+  const foregroundDocs = await baselineSearch(query, fgK, { withVectors: true });
+  const foregroundVectors = foregroundDocs.filter((d) => d.vector).map((d) => d.vector!);
+
+  if (!foregroundVectors.length) {
+    console.warn("Sparse foreground returned no vectors — cannot pool a wormhole vector.");
+    return {
+      query,
+      pooledFrom: 0,
+      finalResults: foregroundDocs.slice(0, finalK).map((d) => ({ ...d, hop: "sparse" as const })),
+    };
+  }
+
+  // Step 2: pool foreground embeddings into a single wormhole vector
+  const pooled = poolVectors(foregroundVectors);
+
+  // Step 3: KNN on the pooled vector
+  const denseResults = await denseSearch(pooled, finalK);
+
+  // Step 4: dense-first merge + dedupe, backfilled from sparse
+  const merged = mergeWormholeResultsDenseFirst(denseResults, foregroundDocs, finalK);
+
+  return { query, pooledFrom: foregroundVectors.length, finalResults: merged };
 }

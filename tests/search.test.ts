@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bm25Search, baselineSearch, wormholeHop, escapeSolrTerm } from "../src/search";
+import { bm25Search, baselineSearch, wormholeHop, denseSearch, escapeSolrTerm } from "../src/search";
 
 // Captured before any test below replaces global.fetch with a stub.
 const realFetch: typeof fetch = global.fetch;
@@ -99,6 +99,51 @@ test("wormholeHop extracts term + relatedness pairs from facet buckets", async (
     { term: "rack", relatedness: 0.4 },
   ]);
   assert.equal(result.docs.length, 1);
+});
+
+test("wormholeHop requests the vector field when withVectors is set", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await wormholeHop([0.1, 0.2], 10, { withVectors: true });
+
+  assert.ok((calls[0].body.fields as string[]).includes("vector"));
+});
+
+test("wormholeHop omits the vector field by default", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await wormholeHop([0.1, 0.2], 10);
+
+  assert.ok(!(calls[0].body.fields as string[]).includes("vector"));
+});
+
+test("wormholeHop parses stringified vector components back to numbers", async () => {
+  stubFetch({
+    response: { docs: [{ id: "1", title: "t", vector: ["0.1", "0.2", "-3e-33"] }] },
+  });
+
+  const result = await wormholeHop([0.1, 0.2], 10, { withVectors: true });
+
+  assert.deepEqual(result.docs[0].vector, [0.1, 0.2, -3e-33]);
+});
+
+test("denseSearch runs a plain KNN query with no facet", async () => {
+  const calls = stubFetch({ response: { docs: [{ id: "1", title: "t" }] } });
+
+  const docs = await denseSearch([0.1, 0.2], 5);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.query, "{!knn f=vector topK=5}[0.1,0.2]");
+  assert.equal(calls[0].body.facet, undefined);
+  assert.equal(docs.length, 1);
+});
+
+test("baselineSearch requests the vector field when withVectors is set", async () => {
+  const calls = stubFetch({ response: { docs: [] } });
+
+  await baselineSearch("server", 5, { withVectors: true });
+
+  assert.ok((calls[0].body.fields as string[]).includes("vector"));
 });
 
 // Requires a live Solr instance with the corpus already ingested (docker compose up -d && npm run ingest).

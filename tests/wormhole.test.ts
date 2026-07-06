@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergeWormholeResults } from "../src/wormhole";
+import { mergeWormholeResults, mergeWormholeResultsDenseFirst } from "../src/wormhole";
 import { SolrDoc } from "../src/search";
 
 const doc = (id: string): SolrDoc => ({ id, title: `title-${id}` });
@@ -76,5 +76,44 @@ test("deduped shared doc retains hop: sparse (preferring sparse origin)", () => 
   const merged = mergeWormholeResults(sparse, dense, 5);
 
   assert.equal(merged[0].id, "shared");
+  assert.equal(merged[0].hop, "sparse");
+});
+
+// ── mergeWormholeResultsDenseFirst (sparse→dense mirror image) ──────────
+
+test("dense results come first, in order", () => {
+  const dense = [doc("d1"), doc("d2")];
+  const sparse = [doc("s1"), doc("s2"), doc("s3")];
+
+  const merged = mergeWormholeResultsDenseFirst(dense, sparse, 5);
+
+  assert.deepEqual(merged.map((d) => d.id), ["d1", "d2", "s1", "s2", "s3"]);
+});
+
+test("sparse backfills remaining slots when dense is short", () => {
+  const dense = [doc("d1")];
+  const sparse = [doc("s1"), doc("s2"), doc("s3")];
+
+  const merged = mergeWormholeResultsDenseFirst(dense, sparse, 3);
+
+  assert.deepEqual(merged.map((d) => d.id), ["d1", "s1", "s2"]);
+});
+
+test("dedupes by id, preferring the dense occurrence", () => {
+  const dense = [doc("shared"), doc("d2")];
+  const sparse = [doc("shared"), doc("s1")];
+
+  const merged = mergeWormholeResultsDenseFirst(dense, sparse, 5);
+
+  assert.deepEqual(merged.map((d) => d.id), ["shared", "d2", "s1"]);
+  assert.equal(merged[0].hop, "dense");
+});
+
+test("falls back to sparse-only when dense is empty", () => {
+  const sparse = [doc("s1"), doc("s2")];
+
+  const merged = mergeWormholeResultsDenseFirst([], sparse, 5);
+
+  assert.deepEqual(merged.map((d) => d.id), ["s1", "s2"]);
   assert.equal(merged[0].hop, "sparse");
 });

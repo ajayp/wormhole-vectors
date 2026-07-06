@@ -11,6 +11,7 @@ The idea: use a vector search to find the right neighborhood of documents, then 
 - [The Problem It Solves](#the-problem-it-solves)
 - [The Wormhole Solution](#the-wormhole-solution)
 - [Examples](#examples)
+- [Other Traversal Directions](#other-traversal-directions)
 - [Concept Overview](#concept-overview)
 - [Setup & Ingestion](#setup--ingestion)
 - [Configuration](#configuration)
@@ -207,6 +208,31 @@ Together, Case 3 and Case 5 make the strongest version of the pitch: the *same* 
 
 ---
 
+## Other Traversal Directions
+
+The dense → SKG → sparse pipeline above is one direction through the wormhole. This repo also implements the reverse hop.
+
+### Sparse → Dense (`s2d:`)
+
+The talk's "easy direction" (52:17): run a plain keyword search first, average the embeddings of the top-N results into a single "wormhole vector" (element-wise mean + L2 normalization), then KNN on that pooled vector.
+
+```
+s2d: coffee bean roast
+Pooled 15 sparse foreground doc(s) into wormhole vector
+
+Wormhole Results                           │ Plain BM25 Search
+------------------------------------------─┼─------------------------------------------
+Java Coffee Origins [D]                    │ Sumatra Coffee Roasting Guide
+Coffee Bean Processing on Java Island [D]   │ Coffee Bean Processing on Java Island
+Brewing Methods for Indonesian Coffee [D]   │ Specialty Coffee Roasters and Java
+Sumatra Coffee Roasting Guide [D]           │ Indonesian Coffee Varietals
+Specialty Coffee Roasters and Java [D]      │ Java Coffee Origins
+```
+
+Because the sparse foreground is raw BM25 with no SKG disambiguation, this direction inherits BM25's literal-matching blind spot: if the keyword search's own top results are mixed across domains, pooling them produces a muddier wormhole vector than the dense→sparse direction gets from its SKG-derived terms. It's a real hop, not a guaranteed fix.
+
+---
+
 ## Concept Overview
 
 The SKG step is where the wormhole bridge gets built. It doesn't need an LLM to translate vectors back into words. Instead, it reuses the indexes a search engine already has — the forward index tells you which terms are in a given document, and the inverted index tells you which documents contain a given term. By walking from the foreground set of documents (via the forward index) out to their terms, then checking how often those terms show up across the rest of the corpus (via the inverted index), Solr can work out statistically which terms are unusually characteristic of this specific document set — no additional embeddings, no generative model, just counting.
@@ -301,6 +327,11 @@ npm run cli
 
 Type an intentionally ambiguous query to see wormhole vs. plain BM25 results side-by-side. Type `exit` or leave the line empty to quit.
 
+Prefix a query to switch traversal direction (see [Other Traversal Directions](#other-traversal-directions)):
+
+- plain query — dense → SKG → sparse (default)
+- `s2d: <query>` — sparse → SKG → dense (reverse hop)
+
 ### Tests
 
 ```bash
@@ -315,9 +346,9 @@ npm run test:integration
 npm run test:all
 ```
 
-**Unit tests** (`npm test`) cover query-building logic (`search.ts`) and merge logic (`wormhole.ts`) using mocked Solr responses. They verify that the right fields, boosts, and escaping are applied — no live instance needed.
+**Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), and vector pooling math (`pool.ts`) using mocked Solr responses and pure-function inputs. They verify that the right fields, boosts, and escaping are applied — no live instance needed.
 
-**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, and stemming invariants. They auto-skip with a clear message if Solr is unavailable.
+**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, and sparse→dense pooling landing in the right dense neighborhood. They auto-skip with a clear message if Solr is unavailable.
 
 ---
 
@@ -345,13 +376,15 @@ wormhole-poc/
 │   ├── embed.ts            # Local text-to-vector embedding (Xenova)
 │   ├── solr.ts             # Schema setup for the Solr core
 │   ├── search.ts           # Dense, BM25, and SKG query builders
-│   ├── wormhole.ts         # Orchestrates the dense→SKG→sparse pipeline
+│   ├── pool.ts             # Vector pooling (mean + L2 norm)
+│   ├── wormhole.ts         # Orchestrates the dense↔sparse pipelines (both directions)
 │   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
 │   └── ingest.ts           # Seeds the demo corpus into Solr
 └── tests/
     ├── search.test.ts            # Query-building unit tests (mocked fetch)
     ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)
+    ├── pool.test.ts              # Vector pooling unit tests (pure functions)
     └── integration/
         └── integration.test.ts   # End-to-end live Solr retrieval tests
 ```
@@ -362,4 +395,4 @@ wormhole-poc/
 
 [Beyond Hybrid Search: Traversing Vector Spaces with Wormhole Vectors](https://www.youtube.com/watch?v=fvDC7nK-_C0) — the talk this repo implements.
 
-> This PoC implements the dense → sparse direction of wormhole traversal. The full technique as described in the talk also supports the reverse direction (sparse → dense via vector pooling), iterative traversal loops, and additional search spaces such as behavioral/clickstream embeddings.
+> This PoC implements the dense → sparse direction of wormhole traversal, and the reverse sparse → dense direction (`s2d:`, via vector pooling). The full technique as described in the talk also supports iterative traversal loops and additional search spaces such as behavioral/clickstream embeddings, which this repo does not yet implement.

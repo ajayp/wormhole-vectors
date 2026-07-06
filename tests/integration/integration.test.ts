@@ -16,7 +16,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-import { wormholeSearch } from "../../src/wormhole";
+import { wormholeSearch, wormholeSearchSparseToDense } from "../../src/wormhole";
 import { baselineSearch, wormholeHop } from "../../src/search";
 import { embedText } from "../../src/embed";
 
@@ -366,5 +366,27 @@ integrationTest("corpus is fully indexed: all 8 knowledge domains have retrievab
       docsForDomain.length > 0,
       `expected at least one ${domain} doc for query "${query}", got 0`
     );
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// PHASE A: Sparse → dense hop (bidirectional traversal)
+// ──────────────────────────────────────────────────────────────────────
+
+integrationTest("'s2d: java' from a programming-heavy BM25 set lands in java_programming dense space", async () => {
+  const result = await wormholeSearchSparseToDense("java", { finalK: FINAL_K });
+
+  assert.ok(result.pooledFrom > 0, "expected at least one pooled foreground vector");
+  assert.ok(result.finalResults.length > 0);
+  const progCount = result.finalResults.filter((d) => d.source === "java_programming").length;
+  assert.ok(progCount >= 3, `expected ≥3 java_programming results, got ${progCount}/${FINAL_K}`);
+});
+
+integrationTest("'s2d: coffee bean roast' pools into the java_coffee dense neighborhood", async () => {
+  const result = await wormholeSearchSparseToDense("coffee bean roast", { finalK: FINAL_K });
+
+  assert.ok(result.finalResults.length > 0);
+  for (const doc of result.finalResults) {
+    assert.equal(doc.source, "java_coffee", `result "${doc.title}" has source "${doc.source}"`);
   }
 });
