@@ -1,6 +1,7 @@
 import * as readline from "readline";
 import * as dotenv from "dotenv";
 import { wormholeSearch, wormholeSearchSparseToDense, RankedDoc } from "./wormhole";
+import { iterativeWormholeSearch } from "./iterate";
 import { baselineSearch } from "./search";
 
 dotenv.config();
@@ -61,6 +62,18 @@ async function runSparseToDense(q: string) {
   printSideBySide(result.finalResults, baseline);
 }
 
+async function runIterative(q: string) {
+  const result = await iterativeWormholeSearch(q, { finalK: FINAL_K });
+
+  const hopSummary = result.hopStats.map((h) => `H${h.hop}:+${h.newDocs}`).join(", ");
+  console.log(`Hops: [${hopSummary}]\n`);
+
+  for (const doc of result.finalResults) {
+    console.log(`[H${doc.hopNumber}] ${doc.title ?? "—"}`);
+  }
+  console.log();
+}
+
 async function run() {
   console.clear();
   console.log("=".repeat(72));
@@ -72,7 +85,8 @@ async function run() {
   console.log("    [S] = sparse hop (BM25, context-driven)");
   console.log("    [D] = dense hop (KNN, semantic similarity backfill)");
   console.log("    plain query    = dense → SKG → sparse (default)");
-  console.log("    s2d: <query>   = sparse → SKG → dense (reverse hop)\n");
+  console.log("    s2d: <query>   = sparse → SKG → dense (reverse hop)");
+  console.log("    iter: <query>  = iterative hopping across rounds\n");
 
   const ask = () => {
     rl.question('Query (or "exit"): ', async (input) => {
@@ -82,6 +96,8 @@ async function run() {
       try {
         if (raw.toLowerCase().startsWith("s2d:")) {
           await runSparseToDense(raw.slice(4).trim());
+        } else if (raw.toLowerCase().startsWith("iter:")) {
+          await runIterative(raw.slice(5).trim());
         } else {
           await runDenseToSparse(raw);
         }

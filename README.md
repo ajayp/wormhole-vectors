@@ -210,7 +210,7 @@ Together, Case 3 and Case 5 make the strongest version of the pitch: the *same* 
 
 ## Other Traversal Directions
 
-The dense → SKG → sparse pipeline above is one direction through the wormhole. This repo also implements the reverse hop.
+The dense → SKG → sparse pipeline above is one direction through the wormhole. This repo also implements the reverse hop, a broad/specific signal that adjusts how the pipeline merges results, and iterative multi-hop traversal.
 
 ### Sparse → Dense (`s2d:`)
 
@@ -247,6 +247,23 @@ When the query is broad (below `SPECIFICITY_THRESHOLD`, default `0.6`), the spar
 ### Multi-Field SKG
 
 The SKG facet used to derive keyword terms also runs a second sub-facet over the `source` field — the same `relatedness($fore,$back)` statistic, applied to a categorical field instead of a text field, mirroring the talk's `category:Korean + terms` example (69:43). It surfaces which document category the foreground set is statistically leaning toward, printed above the term list (`SKG category: java_programming(0.082), java_coffee(0.001)`). `bm25Search` also accepts an optional `categories` boost clause (`source:"java_programming"^0.082 OR ...`) for callers that want to combine category and term signals in one structured query — the demo pipeline itself doesn't wire it in by default, since term relatedness is currently the more reliable disambiguation signal for this corpus.
+
+### Iterative Hopping (`iter:`)
+
+"Repeat as needed" (29:07): bounce between dense and sparse spaces across multiple rounds, accumulating unseen documents each hop, instead of stopping after one round trip. Hop 1 is the usual dense+SKG hop; even hops are sparse BM25 from the SKG terms; odd hops after the first pool the previous hop's vectors back into a dense KNN. It stops at `MAX_HOPS` (default `4`) or once a hop contributes fewer than 2 new documents (convergence), and ranks by order of first discovery — earlier hops carry more confidence.
+
+```
+iter: server
+Hops: [H1:+15, H2:+4, H3:+3, H4:+0]
+
+[H1] Linux Server Administration
+[H1] PostgreSQL Database Server Setup
+[H1] Outdoor and Patio Server Challenges
+[H1] Server Sidework and Closing Duties
+[H1] Bar and Restaurant Server Teamwork
+```
+
+Here hop 4 contributed 0 new documents, so the loop stops early rather than running to `MAX_HOPS` — a natural convergence signal that iterating further wouldn't turn up anything new.
 
 ---
 
@@ -348,6 +365,7 @@ Prefix a query to switch traversal direction (see [Other Traversal Directions](#
 
 - plain query — dense → SKG → sparse (default)
 - `s2d: <query>` — sparse → SKG → dense (reverse hop)
+- `iter: <query>` — iterative hopping across rounds
 
 ### Tests
 
@@ -365,7 +383,7 @@ npm run test:all
 
 **Unit tests** (`npm test`) cover query-building logic (`search.ts`), merge logic (`wormhole.ts`), and vector pooling/specificity math (`pool.ts`) using mocked Solr responses and pure-function inputs. They verify that the right fields, boosts, and escaping are applied — no live instance needed.
 
-**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), and SKG category alignment. They auto-skip with a clear message if Solr is unavailable.
+**Integration tests** (`npm run test:integration`) verify retrieval *outcomes* against a live Solr instance: disambiguation correctness (all results land in the right `source` category), SKG term semantic coherence, wormhole-vs-baseline deltas, stemming invariants, sparse→dense pooling landing in the right dense neighborhood, specificity ordering (broad vs. specific queries), SKG category alignment, and iterative-hop convergence. They auto-skip with a clear message if Solr is unavailable.
 
 ---
 
@@ -380,6 +398,7 @@ These are operational settings, set via local `.env` values:
 | `SKG_LIMIT` | `8` | Maximum number of SKG terms extracted from the foreground set |
 | `FINAL_K` | `5` | Total number of results displayed per search operation |
 | `SPECIFICITY_THRESHOLD` | `0.6` | Below this mean-cosine-to-centroid score, a query is treated as "broad" and the sparse hop fetch is widened |
+| `MAX_HOPS` | `4` | Maximum rounds for iterative hopping (`iter:`) before stopping regardless of convergence |
 
 ---
 
@@ -396,6 +415,7 @@ wormhole-poc/
 │   ├── search.ts           # Dense, BM25, and SKG query builders
 │   ├── pool.ts             # Vector pooling (mean + L2 norm) and foreground specificity
 │   ├── wormhole.ts         # Orchestrates the dense↔sparse pipelines (both directions)
+│   ├── iterate.ts          # Iterative multi-hop traversal
 │   └── cli.ts              # Interactive REPL for side-by-side comparisons
 ├── scripts/
 │   └── ingest.ts           # Seeds the demo corpus into Solr
@@ -413,4 +433,4 @@ wormhole-poc/
 
 [Beyond Hybrid Search: Traversing Vector Spaces with Wormhole Vectors](https://www.youtube.com/watch?v=fvDC7nK-_C0) — the talk this repo implements.
 
-> This PoC implements the dense → sparse direction of wormhole traversal, and the reverse sparse → dense direction (`s2d:`, via vector pooling). The full technique as described in the talk also supports iterative traversal loops and additional search spaces such as behavioral/clickstream embeddings, which this repo does not yet implement.
+> This PoC implements the dense → sparse direction of wormhole traversal, the reverse sparse → dense direction (`s2d:`, via vector pooling), and iterative multi-hop traversal loops (`iter:`). The full technique as described in the talk also supports additional search spaces such as behavioral/clickstream embeddings, which this repo does not yet implement.

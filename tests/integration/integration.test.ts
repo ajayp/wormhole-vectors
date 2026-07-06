@@ -19,6 +19,7 @@ dotenv.config();
 import { wormholeSearch, wormholeSearchSparseToDense } from "../../src/wormhole";
 import { baselineSearch, wormholeHop } from "../../src/search";
 import { embedText } from "../../src/embed";
+import { iterativeWormholeSearch } from "../../src/iterate";
 
 const SOLR_URL = process.env.SOLR_URL ?? "http://localhost:8983/solr";
 const FINAL_K = 5;
@@ -410,4 +411,21 @@ integrationTest("SKG category matches the dominant source of the foreground ('Ja
 
   assert.ok(result.skgCategories.length > 0, "expected at least one SKG category");
   assert.equal(result.skgCategories[0].term, "java_programming");
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// PHASE C: Iterative hopping
+// ──────────────────────────────────────────────────────────────────────
+
+integrationTest("iterative search converges within MAX_HOPS and returns ≥ as many unique docs as single-shot", async () => {
+  const [iterative, singleShot] = await Promise.all([
+    iterativeWormholeSearch("server", { finalK: 20 }),
+    wormholeSearch("server", { finalK: 5 }),
+  ]);
+
+  assert.ok(iterative.hopStats.length <= parseInt(process.env.MAX_HOPS ?? "4"));
+  assert.ok(
+    iterative.finalResults.length >= singleShot.finalResults.length,
+    `expected iterative (${iterative.finalResults.length}) >= single-shot (${singleShot.finalResults.length})`
+  );
 });
