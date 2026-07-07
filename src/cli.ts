@@ -15,6 +15,8 @@ const coreFlag = process.argv.find((a) => a.startsWith("--core="))?.split("=")[1
 const CORE = coreFlag ?? process.env.SOLR_CORE ?? "wormhole_demo";
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+let closed = false;
+rl.on("close", () => { closed = true; });
 
 const HOP_TAGS: Record<RankedDoc["hop"], string> = { sparse: "S", dense: "D", behavioral: "B" };
 
@@ -108,6 +110,7 @@ async function run() {
   console.log("    behave: <query> = dense → behavioral space (serendipity)\n");
 
   const ask = () => {
+    if (closed) return;
     rl.question(`[${CORE}] Query (or "exit"): `, async (input) => {
       const raw = input.trim();
       if (!raw || raw.toLowerCase() === "exit") { rl.close(); return; }
