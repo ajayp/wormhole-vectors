@@ -19,6 +19,7 @@ import { wormholeSearch, wormholeSearchSparseToDense, wormholeSearchBehavioral }
 import { baselineSearch, wormholeHop } from "../../src/search";
 import { embedText } from "../../src/embed";
 import { iterativeWormholeSearch } from "../../src/iterate";
+import { DEMO_QUERIES } from "../../scripts/eval-queries";
 
 const SOLR_URL = process.env.SOLR_URL ?? "http://localhost:8983/solr";
 const FINAL_K = 5;
@@ -358,19 +359,7 @@ integrationTest("single word 'food' → hospitality-leaning results", async () =
 // ──────────────────────────────────────────────────────────────────────
 
 integrationTest("corpus is fully indexed: all 8 knowledge domains have retrievable docs", async () => {
-  const domainQueries = [
-    { query: "Java programming", domain: "java_programming" },
-    { query: "coffee bean", domain: "java_coffee" },
-    { query: "Mercury planet orbit", domain: "mercury_planet" },
-    { query: "Mercury element toxicity", domain: "mercury_element" },
-    { query: "Mercury Cougar automobile", domain: "mercury_car" },
-    { query: "Python programming NumPy", domain: "python_programming" },
-    { query: "Python snake constrictor", domain: "python_snake" },
-    { query: "server technology Linux", domain: "server_tech" },
-    { query: "server hospitality restaurant", domain: "server_hospitality" },
-  ];
-
-  for (const { query, domain } of domainQueries) {
+  for (const { query, domain } of DEMO_QUERIES) {
     const result = await wormholeSearch(query, { finalK: 10 });
     const docsForDomain = result.finalResults.filter((d) => d.source === domain);
     assert.ok(

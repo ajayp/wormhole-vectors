@@ -1,4 +1,5 @@
 import { solrPost } from "./solr-client";
+import { embedText } from "./embed";
 
 process.loadEnvFile();
 
@@ -207,4 +208,39 @@ export async function baselineSearch(
   })) as { response: { docs: Array<Record<string, unknown>> } };
 
   return normalizeDocs(response.response.docs);
+}
+
+const RRF_K = 60; // standard smoothing constant from the original RRF paper
+
+// The talk's baseline for "what most hybrid search looks like out of the
+// box" (19:55–22:18): run sparse (BM25) and dense (KNN) independently, then
+// blend by reciprocal rank fusion — score(doc) = sum over lists of
+// 1/(RRF_K + rank). Wormhole vectors are pitched as going *beyond* this; this
+// function exists so that claim has something concrete to be measured against.
+export async function rrfSearch(
+  query: string,
+  k: number,
+  opts?: SearchOpts & { embed?: (text: string) => Promise<number[]> }
+): Promise<SolrDoc[]> {
+  const fetchK = Math.max(k, 20);
+  const embed = opts?.embed ?? embedText;
+  const vector = await embed(query);
+  const [sparse, dense] = await Promise.all([
+    baselineSearch(query, fetchK, opts),
+    denseSearch(vector, fetchK, opts),
+  ]);
+
+  const scores = new Map<string, number>();
+  const docsById = new Map<string, SolrDoc>();
+  for (const list of [sparse, dense]) {
+    list.forEach((doc, rank) => {
+      docsById.set(doc.id, doc);
+      scores.set(doc.id, (scores.get(doc.id) ?? 0) + 1 / (RRF_K + rank + 1));
+    });
+  }
+
+  return [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, k)
+    .map(([id]) => docsById.get(id)!);
 }

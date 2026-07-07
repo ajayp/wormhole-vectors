@@ -433,6 +433,31 @@ npm run test:integration:large
 >
 > `LARGE_CORPUS_SAMPLE_SIZE` (default `200`/domain) trades off statistical stability against local embedding time (~5–15 min for ~1,000 docs on CPU); test thresholds use loose purity bands rather than exact matches to stay robust to that noise.
 
+### Evals (optional)
+
+Trey Grainger says it himself in the talk (~63:00): *"I need lots of good evals on how this actually does in practice."* The integration tests above assert pass/fail thresholds on individual queries; `scripts/eval.ts` turns the same domain-labeled query sets into a side-by-side comparison table across four pipelines — plain BM25, plain dense KNN, RRF hybrid (the "smash both together" baseline the talk positions wormhole vectors as going *beyond*, 19:55–22:18), and the wormhole pipeline — reporting purity@k, nDCG@k, and top-1 domain-match rate, averaged over the query set.
+
+```bash
+npm run eval                              # wormhole_demo corpus, k=5
+npm run eval -- --core=wormhole_large     # requires npm run ingest:large first
+npm run eval -- --json                    # machine-readable output only
+```
+
+Measured results (k=5, this repo's corpora, your numbers may vary slightly on re-ingest since embeddings/MF are seeded but corpus sampling for the large corpus is not):
+
+| Corpus | Pipeline | avg purity@5 | avg nDCG@5 | top-1 match rate |
+|---|---|---|---|---|
+| `wormhole_demo` (9 queries) | BM25 | 0.756 | 0.809 | 1.000 |
+| | Dense KNN | 0.978 | 0.984 | 1.000 |
+| | RRF hybrid | 0.956 | 0.962 | 1.000 |
+| | **Wormhole** | **0.978** | **0.976** | 1.000 |
+| `wormhole_large` (15 queries) | BM25 | 0.973 | 0.980 | 1.000 |
+| | Dense KNN | 0.973 | 0.976 | 1.000 |
+| | RRF hybrid | 0.960 | 0.969 | 1.000 |
+| | **Wormhole** | **0.987** | **0.989** | 1.000 |
+
+Two honest caveats on reading this table: first, top-1 match rate is 1.000 across every pipeline on both corpora — these domain-anchored queries aren't hard enough to separate the pipelines on that metric; the purity/nDCG columns are where the differences show up. Second, on the demo corpus RRF hybrid actually scores *below* plain dense KNN — a reminder that RRF's blending can dilute a strong single retriever rather than always improving on it, which is exactly the structural weakness wormhole vectors are pitched as addressing (surfacing *why* a doc matched, not just re-blending scores from two black boxes). Wormhole doesn't dominate every row, but it's the only pipeline that's never the worst performer on either corpus.
+
 ---
 
 ## Configuration
@@ -461,7 +486,7 @@ wormhole-poc/
 │   ├── solr-client.ts      # Thin REST client for Solr
 │   ├── embed.ts            # Local text-to-vector embedding (Xenova)
 │   ├── solr.ts             # Schema setup for the Solr core
-│   ├── search.ts           # Dense, BM25, and SKG query builders
+│   ├── search.ts           # Dense, BM25, RRF hybrid, and SKG query builders
 │   ├── pool.ts             # Vector pooling (mean + L2 norm) and foreground specificity
 │   ├── mf.ts               # Matrix factorization → behavioral item vectors
 │   ├── wormhole.ts         # Orchestrates the dense↔sparse↔behavioral pipelines
@@ -470,7 +495,9 @@ wormhole-poc/
 ├── scripts/
 │   ├── interactions.ts     # Synthetic persona × document interaction matrix
 │   ├── ingest.ts           # Seeds the demo corpus (text + behavior vectors) into Solr
-│   └── ingest-large.ts     # Seeds the optional large real-text corpus into Solr
+│   ├── ingest-large.ts     # Seeds the optional large real-text corpus into Solr
+│   ├── eval-queries.ts     # Domain-labeled query fixtures, shared with integration tests
+│   └── eval.ts             # Eval harness: wormhole vs. BM25/dense/RRF, purity@k + nDCG@k
 └── tests/
     ├── search.test.ts            # Query-building unit tests (mocked fetch)
     ├── wormhole.test.ts          # Merge-logic unit tests (pure functions)

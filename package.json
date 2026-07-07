@@ -6,6 +6,7 @@
     "ingest": "tsx scripts/ingest.ts",
     "ingest:large": "tsx scripts/ingest-large.ts",
     "cli": "tsx src/cli.ts",
+    "eval": "tsx scripts/eval.ts",
     "test": "tsx --test tests/*.test.ts",
     "test:integration": "tsx --test tests/integration/**/*.test.ts",
     "test:integration:large": "tsx --test tests/integration/large-corpus.test.ts",

@@ -67,6 +67,7 @@ process.loadEnvFile();
 
 import { wormholeSearch } from "../../src/wormhole";
 import { baselineSearch } from "../../src/search";
+import { LARGE_QUERIES } from "../../scripts/eval-queries";
 
 const SOLR_URL = process.env.SOLR_URL ?? "http://localhost:8983/solr";
 const CORE = "wormhole_large";
@@ -126,27 +127,7 @@ function dominantDomainShare(sources: (string | undefined)[]): number {
 //    do reasonably well here too, since the keywords are domain-distinctive.
 // ──────────────────────────────────────────────────────────────────────
 
-const DOMAIN_ANCHORED_QUERIES = [
-  { query: "doctor treatment infection symptoms", domain: "health" },
-  { query: "cancer surgery blood pressure", domain: "health" },
-  { query: "nutrition diet blood pressure", domain: "health" },
-
-  { query: "bread baking recipe oven", domain: "cooking" },
-  { query: "chicken recipe knife prep", domain: "cooking" },
-  { query: "oven roast chicken tips", domain: "cooking" },
-
-  { query: "kubernetes container deployment pipeline", domain: "devops" },
-  { query: "docker ansible provisioning", domain: "devops" },
-  { query: "git monitoring automation", domain: "devops" },
-
-  { query: "star wars alien science fiction", domain: "scifi" },
-  { query: "novel universe planet fiction", domain: "scifi" },
-  { query: "robot universe fiction", domain: "scifi" },
-
-  { query: "visa passport flight hotel", domain: "travel" },
-  { query: "airport customs currency", domain: "travel" },
-  { query: "backpack tips travel", domain: "travel" },
-];
+const DOMAIN_ANCHORED_QUERIES = LARGE_QUERIES;
 
 const PURITY_THRESHOLD = 3 / 5; // >= 3 of top 5 in the anchored domain
 

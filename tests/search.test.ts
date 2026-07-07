@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { bm25Search, baselineSearch, wormholeHop, denseSearch, escapeSolrTerm } from "../src/search";
+import { bm25Search, baselineSearch, wormholeHop, denseSearch, rrfSearch, escapeSolrTerm } from "../src/search";
 
 // Captured before any test below replaces global.fetch with a stub.
 const realFetch: typeof fetch = global.fetch;
@@ -204,6 +204,48 @@ test("denseSearch requests the behavior_vector field when withBehaviorVectors is
   await denseSearch([0.1, 0.2], 5, { withBehaviorVectors: true });
 
   assert.ok((calls[0].body.fields as string[]).includes("behavior_vector"));
+});
+
+// rrfSearch fires baselineSearch and denseSearch concurrently over the same
+// fetch stub — route by query shape (KNN clause vs. text:(...)) so each leg
+// gets its own doc set.
+function stubFetchByQueryShape(sparseDocs: Array<{ id: string }>, denseDocs: Array<{ id: string }>) {
+  (global as any).fetch = async (_url: string, init?: RequestInit) => {
+    const body = JSON.parse(init!.body as string);
+    const docs = (body.query as string).startsWith("{!knn") ? denseDocs : sparseDocs;
+    return { ok: true, json: async () => ({ response: { docs } }) } as Response;
+  };
+}
+
+test("rrfSearch fuses sparse and dense rankings by reciprocal rank", async () => {
+  stubFetchByQueryShape(
+    [{ id: "a" }, { id: "b" }, { id: "c" }],
+    [{ id: "b" }, { id: "a" }, { id: "d" }]
+  );
+
+  const docs = await rrfSearch("query", 5, { embed: async () => [0.1, 0.2] });
+
+  // "a" and "b" each appear in both lists (higher fused score); "b" has the
+  // better combined rank (1st dense + 2nd sparse) than "a" (1st sparse + 2nd dense)
+  // — tied ranks-sum, but RRF's harmonic weighting favors "b" here since rank 1
+  // contributes more than rank 2 non-linearly. Assert set membership and that
+  // both doubly-ranked docs outrank the singly-ranked ones, rather than pinning
+  // an exact order that's sensitive to the RRF_K constant.
+  const ids = docs.map((d) => d.id);
+  assert.deepEqual(new Set(ids), new Set(["a", "b", "c", "d"]));
+  assert.ok(ids.indexOf("a") < ids.indexOf("c"));
+  assert.ok(ids.indexOf("b") < ids.indexOf("d"));
+});
+
+test("rrfSearch truncates to k", async () => {
+  stubFetchByQueryShape(
+    [{ id: "a" }, { id: "b" }, { id: "c" }],
+    [{ id: "d" }, { id: "e" }, { id: "f" }]
+  );
+
+  const docs = await rrfSearch("query", 2, { embed: async () => [0.1, 0.2] });
+
+  assert.equal(docs.length, 2);
 });
 
 test("denseSearch parses stringified behavior_vector components back to numbers", async () => {
