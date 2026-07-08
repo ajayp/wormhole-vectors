@@ -217,6 +217,11 @@ The dense → SKG → sparse pipeline above is one direction through the wormhol
 The talk's "easy direction" (52:17): run a plain keyword search first, average the embeddings of the top-N results into a single "wormhole vector" (element-wise mean + L2 normalization), then KNN on that pooled vector.
 
 ```
+Query ──► BM25 (sparse) ──► top-N docs ──► pool embeddings ──► KNN (dense) ──► Results
+                              (foreground)   (mean + L2 norm)
+```
+
+```
 s2d: coffee bean roast
 Pooled 15 sparse foreground doc(s) into wormhole vector
 
@@ -236,6 +241,14 @@ Because the sparse foreground is raw BM25 with no SKG disambiguation, this direc
 Alongside the SKG terms, the dense→sparse pipeline now measures how tightly the foreground set clusters: the mean cosine similarity of each foreground document's embedding to the pooled centroid of the set (61:29 in the talk). A context-free query like `server` spans two unrelated domains (tech and hospitality) and scores low; a query that lands squarely in one domain scores higher.
 
 ```
+foreground vectors ──► cosine to centroid ──► specificity score
+                                                     │
+                                low (< 0.6, "broad") ┴ high ("specific")
+                                        │
+                              widen sparse fetch (2×) before merging
+```
+
+```
 Query: server
 SKG category: server_hospitality(0.049), server_tech(0.040)
 SKG terms: [server(0.066), allergen(0.040), attent(0.040), ...]
@@ -246,11 +259,23 @@ When the query is broad (below `SPECIFICITY_THRESHOLD`, default `0.6`), the spar
 
 ### Multi-Field SKG
 
+```
+foreground docs ──► SKG facet ──┬─► terms      (field: text_terms)
+                                 └─► categories (field: source)
+```
+
 The SKG facet used to derive keyword terms also runs a second sub-facet over the `source` field — the same `relatedness($fore,$back)` statistic, applied to a categorical field instead of a text field, mirroring the talk's `category:Korean + terms` example (69:43). It surfaces which document category the foreground set is statistically leaning toward, printed above the term list (`SKG category: java_programming(0.082), java_coffee(0.001)`). `bm25Search` also accepts an optional `categories` boost clause (`source:"java_programming"^0.082 OR ...`) for callers that want to combine category and term signals in one structured query — the demo pipeline itself doesn't wire it in by default, since term relatedness is currently the more reliable disambiguation signal for this corpus.
 
 ### Iterative Hopping (`iter:`)
 
 "Repeat as needed" (29:07): bounce between dense and sparse spaces across multiple rounds, accumulating unseen documents each hop, instead of stopping after one round trip. Hop 1 is the usual dense+SKG hop; even hops are sparse BM25 from the SKG terms; odd hops after the first pool the previous hop's vectors back into a dense KNN. It stops at `MAX_HOPS` (default `4`) or once a hop contributes fewer than 2 new documents (convergence), and ranks by order of first discovery — earlier hops carry more confidence.
+
+```
+H1: dense + SKG ──► H2: sparse (BM25 on H1's SKG terms) ──► H3: dense (pool H2's vectors) ──► H4: sparse ──► ...
+    (new docs)          (new docs)                              (new docs)                       │
+                                                                                     stop: MAX_HOPS reached, or
+                                                                                     a hop added < 2 new docs
+```
 
 ```
 iter: server
@@ -272,6 +297,13 @@ The talk's third vector space (40:39–45:36): alongside *what documents mean* (
 Since this PoC has no real users, the interactions are synthetic but deterministic: [scripts/interactions.ts](scripts/interactions.ts) defines 24 personas with affinities across the corpus's `source` categories (a `barista` touches both `java_coffee` and `server_hospitality` docs; a `polyglot_developer` touches both `python_programming` and `java_programming`), and generates a seeded users × items implicit-feedback matrix (values 0/1/3). [src/mf.ts](src/mf.ts) factorizes that matrix with plain gradient descent (no dependencies, 16 dims, 200 epochs, fixed seed) and the L2-normalized item vectors are indexed into a second `DenseVectorField` (`behavior_vector`) at ingest time.
 
 The `behave:` pipeline then hops **across spaces**: dense text KNN finds what the query *means*, the foreground's behavior vectors are pooled into a wormhole vector (same pooling as `s2d:`), and a KNN in the behavioral space finds what that audience *also engages with* — keeping only documents the dense hop did **not** find, so the `[B]`-tagged results are pure behavioral contribution:
+
+```
+Query ──► embed ──► dense KNN (text space) ──► foreground docs
+                                                     │ pool behavior_vector
+                                                     ▼
+                                     KNN (behavioral space) ──► drop docs already in foreground ──► [B] results
+```
 
 ```
 behave: java coffee
@@ -436,6 +468,13 @@ npm run test:integration:large
 ### Evals (optional)
 
 Trey Grainger says it himself in the talk (~63:00): *"I need lots of good evals on how this actually does in practice."* The integration tests above assert pass/fail thresholds on individual queries; `scripts/eval.ts` turns the same domain-labeled query sets into a side-by-side comparison table across four pipelines — plain BM25, plain dense KNN, RRF hybrid (the "smash both together" baseline the talk positions wormhole vectors as going *beyond*, 19:55–22:18), and the wormhole pipeline — reporting purity@k, nDCG@k, and top-1 domain-match rate, averaged over the query set.
+
+```
+          ┌─► BM25 (sparse) ─────────────┐
+Query ────┼─► Dense KNN ─────────────────┤
+ (× N)    ├─► RRF (BM25 + Dense, fused) ─┼─► purity@k / nDCG@k / top-1, averaged over all queries
+          └─► Wormhole (dense→SKG→sparse)┘
+```
 
 ```bash
 npm run eval                              # wormhole_demo corpus, k=5
